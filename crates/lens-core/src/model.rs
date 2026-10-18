@@ -7,7 +7,14 @@ use serde::{Deserialize, Serialize};
 pub enum Agent {
     ClaudeCode,
     Codex,
+    #[serde(rename = "agy")]
+    Antigravity,
 }
+
+impl Agent {
+    pub const ALL: [Agent; 3] = [Agent::ClaudeCode, Agent::Codex, Agent::Antigravity];
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -208,6 +215,7 @@ pub mod v5 {
         let a = match agent {
             Agent::ClaudeCode => "claude",
             Agent::Codex => "codex",
+            Agent::Antigravity => "agy",
         };
         format!("wsl:{distro}:{a}")
     }

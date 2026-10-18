@@ -270,3 +270,21 @@ fn projects_changed_only_on_change() {
     agg.reeval();
     assert_eq!(count_projects_changed(&mut agg), 0);
 }
+
+#[test]
+fn project_row_includes_antigravity_agent() {
+    let clock = clock_at(10);
+    let mut agg = Aggregator::new(clock);
+    let mut s1 = SessionState::new("claude_s", SessionKind::TopLevel);
+    s1.touch(Some(at(1)));
+    agg.upsert(input("claude-local", Agent::ClaudeCode, s1, proj("my-repo")));
+
+    let mut s2 = SessionState::new("agy_s", SessionKind::TopLevel);
+    s2.touch(Some(at(2)));
+    agg.upsert(input("agy-local", Agent::Antigravity, s2, proj("my-repo")));
+
+    let rows = agg.list_projects();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].agents, vec![Agent::ClaudeCode, Agent::Antigravity]);
+}
+

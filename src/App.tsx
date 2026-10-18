@@ -6,7 +6,7 @@ import type { Agent, Detail, IpcError, ProjectActivity, SourceHealth, SourceStat
 
 // All log-derived strings are rendered as React text nodes only (architecture-v5 section 9).
 
-const AGENT_LABEL: Record<Agent, string> = { claude_code: "Claude Code", codex: "Codex" };
+const AGENT_LABEL: Record<Agent, string> = { claude_code: "Claude Code", codex: "Codex", agy: "Antigravity" };
 const RETRY_MS = 1000;
 
 const STATUS_LABEL: Record<StatusValue, string> = {

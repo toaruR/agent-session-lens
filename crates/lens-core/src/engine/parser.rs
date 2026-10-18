@@ -1,5 +1,4 @@
-//! Per-file parser state (Claude multi-session files vs. single Codex session) and the type probe.
-
+use crate::agy::AgyFile;
 use crate::claude;
 use crate::codex::CodexFile;
 use crate::model::Agent;
@@ -23,6 +22,7 @@ pub(super) enum Parser {
         mixed: bool,
     },
     Codex(Box<CodexFile>),
+    Antigravity(Box<AgyFile>),
 }
 
 impl Parser {
@@ -36,6 +36,7 @@ impl Parser {
                 mixed: false,
             },
             Agent::Codex => Parser::Codex(Box::default()),
+            Agent::Antigravity => Parser::Antigravity(Box::default()),
         }
     }
 
@@ -43,6 +44,7 @@ impl Parser {
         match self {
             Parser::Claude { sessions, .. } => sessions.values().collect(),
             Parser::Codex(f) => f.session.iter().collect(),
+            Parser::Antigravity(f) => f.session.iter().collect(),
         }
     }
 
@@ -50,6 +52,7 @@ impl Parser {
         match self {
             Parser::Claude { sessions, .. } => sessions.values_mut().collect(),
             Parser::Codex(f) => f.session.iter_mut().collect(),
+            Parser::Antigravity(f) => f.session.iter_mut().collect(),
         }
     }
 
@@ -58,6 +61,7 @@ impl Parser {
             // A line whose `type` cannot be read is fully parsed (the reader already capped its size).
             Parser::Claude { .. } => ty.is_none_or(claude::wants_type),
             Parser::Codex(_) => matches!(ty, Some("session_meta" | "event_msg" | "response_item" | "turn_context")),
+            Parser::Antigravity(_) => false,
         }
     }
 
@@ -66,6 +70,7 @@ impl Parser {
         match self {
             Parser::Claude { sessions, primary, .. } => primary.as_ref().and_then(|p| sessions.get_mut(p)),
             Parser::Codex(f) => f.session.as_mut(),
+            Parser::Antigravity(f) => f.session.as_mut(),
         }
     }
 
@@ -102,6 +107,7 @@ impl Parser {
                 }
             }
             Parser::Codex(f) => f.apply(line_no, v),
+            Parser::Antigravity(_) => {}
         }
     }
 }

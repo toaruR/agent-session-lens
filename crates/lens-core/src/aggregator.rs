@@ -440,7 +440,7 @@ impl Aggregator {
         }
         let (mut updating, conf) = aggregate_updating(members.iter().map(|m| &m.status));
         let agents: Vec<Agent> =
-            [Agent::ClaudeCode, Agent::Codex].into_iter().filter(|a| members.iter().any(|m| m.input.agent == *a)).collect();
+            Agent::ALL.into_iter().filter(|a| members.iter().any(|m| m.input.agent == *a)).collect();
         let mut ordered: Vec<(String, Option<DateTime<Utc>>)> =
             self.by_project[key].iter().map(|u| (u.clone(), self.table.get(u).and_then(|e| e.input.last_activity()))).collect();
         ordered.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));

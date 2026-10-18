@@ -1,7 +1,7 @@
 {"$schema":"http://json-schema.org/draft-07/schema#","definitions":{
 "ts":{"type":"string","format":"date-time"},
 "N":{"type":"integer","minimum":0},
-"Agent":{"enum":["claude_code","codex"]},
+"Agent":{"enum":["claude_code","codex","agy"]},
 "Src":{"enum":["event","file_mtime"]},
 "Conf":{"enum":["high","low"]},
 "Diag":{"type":"object","required":["code","count"],"properties":{"code":{"type":"string"},"count":{"$ref":"#/definitions/N"}}},

@@ -1,6 +1,6 @@
 // Mirrors architecture-v5 section 7 (the single type definition of IPC and NDJSON).
 
-export type Agent = "claude_code" | "codex";
+export type Agent = "claude_code" | "codex" | "agy";
 export type Completeness = "complete" | "partial" | "unsupported" | "unavailable";
 export type StatusValue = "running" | "waiting_input" | "idle" | "error" | "unknown";
 export type SessionKind = "top_level" | "subagent" | "fork" | "automated";

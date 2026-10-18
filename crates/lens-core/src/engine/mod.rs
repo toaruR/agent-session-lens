@@ -120,6 +120,14 @@ impl Engine {
             self.dirty.insert(path.to_path_buf());
             return;
         }
+        let path_str = path.to_string_lossy();
+        if let Some(base) = path_str.strip_suffix("-wal").or_else(|| path_str.strip_suffix("-shm")) {
+            let db_path = PathBuf::from(base);
+            if self.files.contains_key(&db_path) {
+                self.dirty.insert(db_path);
+                return;
+            }
+        }
         for (idx, src) in self.sources.iter().enumerate() {
             if path.starts_with(&src.root) && matches_source(src.agent, path) && path.is_file() {
                 self.files.insert(
@@ -143,6 +151,18 @@ impl Engine {
             if let Ok(meta) = std::fs::metadata(path) {
                 if meta.len() != tf.cursor.size || meta.modified().ok() != Some(mtime) {
                     self.dirty.insert(path.clone());
+                    continue;
+                }
+            }
+            // For Antigravity SQLite DBs, changes happen in -wal file
+            if self.sources[tf.source].agent == Agent::Antigravity {
+                let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+                if let Ok(wmeta) = std::fs::metadata(&wal_path) {
+                    if let Ok(wmtime) = wmeta.modified() {
+                        if Some(wmtime) != tf.cursor.mtime {
+                            self.dirty.insert(path.clone());
+                        }
+                    }
                 }
             }
         }

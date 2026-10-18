@@ -1,6 +1,7 @@
 //! Agent Session Lens core. See docs/architecture-v3.md.
 
 pub mod aggregator;
+pub mod agy;
 pub mod change_detector;
 pub mod claude;
 pub mod clock;

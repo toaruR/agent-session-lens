@@ -98,6 +98,8 @@ open ターン = 開始があり完了・中断が無い。tool_open = 未解決
 **Codex CLI**: `sessions/YYYY/MM/DD/rollout-*.jsonl`。ID と project は先頭の `session_meta.payload.{id,cwd}`（2 つ目以降は fork 元で上書きしない）。`thread_source`: `user` → top_level、`subagent` → subagent、`guardian_review` → automated（一覧に出さず親の `autoReview` に集約）、未知は top_level + `unknown_thread_source`。本文は `response_item` の `message` を正とし、`event_msg` は状態判定にだけ使う。title は `thread_name`（`session_index.jsonl`）、無ければ最初の人の発言。
 fork 継承レコードの `timestamp` は fork 時刻に書き換わる。0 始まりの行番号が `session_meta.subagent_history_start_ordinal` 未満は活動に数えない。ordinal が無く `session_meta` が 2 つなら境界不明のため全体を取り込み `fork_boundary_unknown` + low。
 
+**Antigravity (AGY)**: `%USERPROFILE%\.gemini\{antigravity,antigravity-cli,antigravity-ide}\conversations\<uuid>.db`（上書きは `ANTIGRAVITY_HOME`）。SQLite を `mode=ro` かつ `PRAGMA query_only=ON` で開き、`-wal` 更新を検知して再読込する（WAL 未反映を防ぐため `immutable=1` は使用しない）。ID は `trajectory_meta.cascade_id`（またはファイル幹 UUID）。project は `trajectory_metadata_blob` の Field 7（または 1.1）の URI（`outside-of-project` 等の欠落時は None）。人の発言 = `step_type=14` の payload Field 19.2。title は最初の人の発言。アシスタント応答 = `step_type=15` の payload Field 20.1/8。ツール呼出 = `step_type=15` の Field 20.7（1=call_id, 2=name, 3=input）、旧コマンド = `step_type=21` の Field 28.23/25、ツール結果 = `step_type=132`。各ステップの `metadata` Field 1（`google.protobuf.Timestamp`）から時刻を取得。
+
 ## 6. WSL ヘルパー
 
 - ディストロ一覧は `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss\{GUID}` の `DistributionName` / `Version`（WSL を起こさない）。`Version=2` だけ対象、他は `unsupported`。稼働確認は DISTRO_POLL_SECS ごと。停止中は起動せず、`disabledDistros` は監視しない。
@@ -150,7 +152,7 @@ NDJSON は helper → Lens の 1 行 1 メッセージ（各行 MAX_LINE_BYTES �
 {"$schema":"http://json-schema.org/draft-07/schema#","definitions":{
 "ts":{"type":"string","format":"date-time"},
 "N":{"type":"integer","minimum":0},
-"Agent":{"enum":["claude_code","codex"]},
+"Agent":{"enum":["claude_code","codex","agy"]},
 "Src":{"enum":["event","file_mtime"]},
 "Conf":{"enum":["high","low"]},
 "Diag":{"type":"object","required":["code","count"],"properties":{"code":{"type":"string"},"count":{"$ref":"#/definitions/N"}}},
@@ -293,4 +295,4 @@ NDJSON は helper → Lens の 1 行 1 メッセージ（各行 MAX_LINE_BYTES �
 | TRUNC_TEXT_CHARS / TRUNC_OUT_CHARS | 上限超の発言・出力の中間が見えない | 全文保持 | 記録（切り詰めて送る） | 全文検索は不可 |
 | Windows パスキーの小文字化 | 大小文字で別物の `C:\Work\Repo` と `c:\work\repo` が 1 行に統合される（F18） | 大小文字を保つ | 記録 | 区別するディレクトリは統合される |
 
-範囲外: AGY (Antigravity) / Cursor / SQLite・protobuf の読み取り / multi_root・alias・linked worktree 統合 / tokens / トレイ・トースト・単一インスタンス / 多世代ツリー詳細 UI / hooks 連携 / Version=2 以外の WSL / ネットワーク上の DB / Cloud Agent 履歴 / 公式 export 形式 / ヘルパーの配布・同梱・インストール / ビルド・CI / 運用
+範囲外: Cursor / multi_root・alias・linked worktree 統合 / tokens / トレイ・トースト・単一インスタンス / 多世代ツリー詳細 UI / hooks 連携 / Version=2 以外の WSL / ネットワーク上の DB / Cloud Agent 履歴 / 公式 export 形式 / ヘルパーの配布・同梱・インストール / ビルド・CI / 運用

@@ -2,6 +2,7 @@
 
 use super::parser::{Parser, Probe};
 use super::Engine;
+use crate::model::Agent;
 use crate::reader;
 use serde_json::Value;
 use std::path::Path;
@@ -9,6 +10,10 @@ use std::path::Path;
 impl Engine {
     pub(super) fn process_file(&mut self, path: &Path) -> bool {
         let Some(tf) = self.files.get_mut(path) else { return false };
+        let agent = self.sources[tf.source].agent;
+        if agent == Agent::Antigravity {
+            return self.process_agy_file(path);
+        }
         let outcome = match reader::read_new(path, &mut tf.cursor, &self.limits) {
             Ok(o) => {
                 tf.read_error = None;
@@ -97,5 +102,28 @@ impl Engine {
             }
             None => pending.push(code),
         }
+    }
+
+    fn process_agy_file(&mut self, path: &Path) -> bool {
+        let Some(tf) = self.files.get_mut(path) else { return false };
+        let meta = std::fs::metadata(path).ok();
+        tf.cursor.size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        tf.cursor.mtime = meta.as_ref().and_then(|m| m.modified().ok());
+
+        match crate::agy::AgyFile::load(path) {
+            Ok(session) => {
+                tf.read_error = None;
+                tf.parser = Parser::Antigravity(Box::new(crate::agy::AgyFile { session: Some(session) }));
+            }
+            Err(_) => {
+                tf.read_error = Some(std::io::ErrorKind::Other);
+                if let Some(p) = tf.parser.primary_mut() {
+                    p.diag("malformed_record");
+                    p.degraded = true;
+                    p.last_record_unreadable = true;
+                }
+            }
+        }
+        false
     }
 }
