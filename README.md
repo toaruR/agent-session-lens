@@ -1,29 +1,35 @@
 # Agent Session Lens
 
-Claude Code と Codex のローカルセッションログ（読み取り専用）を監視し、プロジェクト単位で「今どのエージェントが何をしているか」を表示するデスクトップアプリ（Tauri + React + Rust）。WSL 上のセッションは `lens-wsl-helper` 経由で取り込みます。
+English | [日本語](README.ja.md)
 
-## ビルドと実行
+A desktop application (Tauri + React + Rust) that monitors local session logs (read-only) of Claude Code and Codex, displaying what each agent is currently doing on a per-project basis in real time. Sessions running inside WSL are ingested via `lens-wsl-helper`.
 
-前提: Rust（stable）、Node.js、Tauri の前提環境（Windows では WebView2）。
+## Build and Run
+
+Prerequisites: Rust (stable), Node.js, and Tauri prerequisites (e.g., WebView2 on Windows).
 
 ```bash
 npm install
-npm run tauri dev     # 開発起動
-npm run build         # 型検査 + フロントエンドビルド
+npm run tauri dev     # Development mode
+npm run build         # Type check + frontend build
 cargo test --workspace
 ```
 
-## 設定（settings.json）
+## Configuration (settings.json)
 
-- 場所: `%APPDATA%\agent-session-lens\settings.json`（`APPDATA` が無い場合は `$HOME/.config/agent-session-lens/settings.json`）。
-- 形式: `{"version":1, "helperPath"?, "disabledDistros"?, "sourceRoots"?}`。壊れている場合は既定値で起動し、元ファイルを `settings.json.bad` に退避します。
-- 通常は UI から変更します。手動編集は反映にアプリ再起動が必要な場合があります。
+- Location: `%APPDATA%\agent-session-lens\settings.json` (falls back to `$HOME/.config/agent-session-lens/settings.json` if `APPDATA` is unset).
+- Format: `{"version":1, "helperPath"?, "disabledDistros"?, "sourceRoots"?}`. If corrupted, the application starts with default values and backs up the invalid file to `settings.json.bad`.
+- Typically modified via the UI. Manual modifications may require restarting the application to take effect.
 
-## WSL ヘルパー
+## WSL Helper
 
-WSL ディストロ内のログは Linux 側の `lens-wsl-helper`（既定 `/usr/local/bin/lens-wsl-helper`、`settings.json` の `helperPath` で変更可）が正規化 NDJSON として送ります。`cargo build -p lens-wsl-helper --release` で作成し、各ディストロへ配置してください。ホスト側は `wsl.exe` 経由で起動・監視します。
+Logs inside WSL distributions are streamed as normalized NDJSON by the Linux-side `lens-wsl-helper` (default `/usr/local/bin/lens-wsl-helper`, configurable via `helperPath` in `settings.json`). Build with `cargo build -p lens-wsl-helper --release` and place it in each distribution. The host launches and monitors it via `wsl.exe`.
 
-## ドキュメント
+## Documentation
 
-- 設計: [docs/architecture-v5.md](docs/architecture-v5.md)
-- 実装（公開面・終了コード・設定・既知の注意点）: [docs/implementation-v5.md](docs/implementation-v5.md)
+- Architecture: [docs/architecture-v5.md](docs/architecture-v5.md)
+- Implementation (Public surface, exit codes, settings, and known notes): [docs/implementation-v5.md](docs/implementation-v5.md)
+
+## License
+
+[MIT License](LICENSE)
