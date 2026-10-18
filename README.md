@@ -5,9 +5,21 @@ English | [日本語](README.ja.md)
 > [!WARNING]
 > This project is currently under active development (WIP).
 
-![Agent Session Lens](docs/images/screenshot.png)
-
 A desktop application (Tauri + React + Rust) that monitors local session logs (read-only) of Claude Code and Codex, displaying what each agent is currently doing on a per-project basis in real time. Sessions running inside WSL are ingested via `lens-wsl-helper`.
+
+## Screenshots
+
+### Normal mode
+
+![Agent Session Lens — normal mode](docs/images/screenshot.png)
+
+### Compact mode
+
+Below 900 px wide, the app shows a compact project list.
+
+![Agent Session Lens — compact mode](docs/images/screenshot-compact.png)
+
+Screenshots use sample data.
 
 ## Build and Run
 

@@ -5,9 +5,21 @@
 > [!WARNING]
 > 本プロジェクトは現在開発中（WIP）です。
 
-![Agent Session Lens](docs/images/screenshot.png)
-
 Claude Code と Codex のローカルセッションログ（読み取り専用）を監視し、プロジェクト単位で「今どのエージェントが何をしているか」を表示するデスクトップアプリ（Tauri + React + Rust）。WSL 上のセッションは `lens-wsl-helper` 経由で取り込みます。
+
+## スクリーンショット
+
+### 通常モード
+
+![Agent Session Lens — 通常モード](docs/images/screenshot.png)
+
+### コンパクトモード
+
+ウィンドウ幅が 900 px 未満になると、プロジェクト一覧をコンパクトに表示します。
+
+![Agent Session Lens — コンパクトモード](docs/images/screenshot-compact.png)
+
+スクリーンショットはサンプルデータを使用しています。
 
 ## ビルドと実行
 
