@@ -149,6 +149,7 @@ pub fn ingest(app: AppHandle, stop: Arc<AtomicBool>) {
             let mut agg = lock(&shared.agg);
             if changed {
                 engine.sync_aggregator(&mut agg);
+                *lock(&shared.session_paths) = engine.session_paths().clone();
             }
             for (name, sv) in &supervisors {
                 agg.set_distro_available(name, sv.origin_available());

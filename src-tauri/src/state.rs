@@ -4,6 +4,8 @@ use lens_core::aggregator::Aggregator;
 use lens_core::ipc::Phase;
 use lens_core::model::v5::SourceHealth;
 use lens_core::settings::{RealFs, SettingsStore};
+use lens_core::tokens::TokenCache;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,6 +19,8 @@ pub struct Shared {
     pub store: Mutex<SettingsStore<RealFs>>,
     pub known_distros: Mutex<Vec<String>>,
     pub known_sources: Mutex<Vec<String>>,
+    pub session_paths: Mutex<BTreeMap<String, PathBuf>>,
+    pub tokens: Mutex<TokenCache>,
 }
 
 pub struct Worker {

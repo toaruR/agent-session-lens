@@ -2,12 +2,13 @@
 
 設計は `docs/architecture-v5.md`。本書は実装済みの公開面を実コードに合わせて記す（挙動の根拠: `crates/lens-core/src/ipc.rs`, `settings.rs`, `supervisor.rs`, `src-tauri/src/{main,commands,state,ingest,wsl}.rs`, `crates/lens-wsl-helper/src/{cli,main,serve}.rs`）。タスク別の検証結果は `docs/plans/implementation-status-v5.md`。
 
-## 1. Tauri コマンド（5 本）
+## 1. Tauri コマンド（6 本）
 
-`tauri::generate_handler!` はこの 5 本のみ（`get_snapshot` は撤去済み）。コマンド本体は `src-tauri/src/commands.rs`（`lens_core::ipc` の薄いラッパ）、`generate_handler!` は `src-tauri/src/main.rs`。エラー型は `IpcError { code, message }`、`code` は snake_case（`not_ready` / `invalid_argument` / `project_not_found` / `distro_not_found` / `source_not_found` / `path_invalid` / `settings_save_failed`）。`message` は固定文言で入力値を含まない。
+`tauri::generate_handler!` はこの 6 本のみ（`get_snapshot` は撤去済み）。コマンド本体は `src-tauri/src/commands.rs`、`generate_handler!` は `src-tauri/src/main.rs`。既存5コマンドのエラー型は `IpcError { code, message }`、`code` は snake_case（`not_ready` / `invalid_argument` / `project_not_found` / `distro_not_found` / `source_not_found` / `path_invalid` / `settings_save_failed`）。`message` は固定文言で入力値を含まない。`get_session_tokens` は固定の日本語エラー文字列を返す。
 
 | コマンド | 引数 | 成功時 | エラー |
 |---|---|---|---|
+| `get_session_tokens` | `session_uid: string` | `TokenReport`（単体・子孫込み合計・子孫件数・不明/失敗件数。使用量記録なしは session が null） | セッション不明・親ログ読取不可・親の計算/保存失敗の固定文字列。子孫のみの失敗は判明分合計と failedCount で返す |
 | `list_projects` | なし | `ProjectActivity[]`（lastUpdatedAt 降順） | `not_ready`（初回スキャン中・未開始） |
 | `get_project_detail` | `key: string` | `Detail`（セッション本文は `sanitize_detail` で伏字化・切り詰め済み） | `invalid_argument`（key 空）、`project_not_found` |
 | `get_health` | なし | `SourceHealth[]` | `not_ready`（Aggregator 未開始のみ。初回スキャン中は部分結果を返す） |

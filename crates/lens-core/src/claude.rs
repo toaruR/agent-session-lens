@@ -55,7 +55,7 @@ pub fn record_session_id(v: &Value) -> Option<&str> {
     str_at(v, &["sessionId"])
 }
 
-fn session_identity(v: &Value, path_agent: Option<&str>) -> Option<(String, SessionKind, Option<String>)> {
+pub(crate) fn session_identity(v: &Value, path_agent: Option<&str>) -> Option<(String, SessionKind, Option<String>)> {
     let sid = str_at(v, &["sessionId"])?;
     if let Some(aid) = path_agent {
         return Some((format!("{sid}{AGENT_PREFIX}{aid}"), SessionKind::Subagent, Some(sid.to_string())));

@@ -58,6 +58,7 @@ pub struct Engine {
     full_parses: BTreeMap<String, u64>,
     /// Codex `session_index.jsonl` cache per source index: (mtime, len, id -> thread_name).
     thread_names: HashMap<usize, ThreadNameCache>,
+    session_paths: BTreeMap<String, PathBuf>,
 }
 
 
@@ -76,6 +77,7 @@ impl Engine {
             max_age: DEFAULT_MAX_AGE,
             full_parses: BTreeMap::new(),
             thread_names: HashMap::new(),
+            session_paths: BTreeMap::new(),
         }
     }
 
@@ -204,7 +206,8 @@ impl Engine {
     pub fn sync_aggregator(&mut self, agg: &mut Aggregator) {
         self.refresh_thread_names();
         let mut inputs: BTreeMap<String, (SessionInput, Option<DateTime<Utc>>)> = BTreeMap::new();
-        for tf in self.files.values() {
+        self.session_paths.clear();
+        for (path, tf) in &self.files {
             let src = &self.sources[tf.source];
             let mtime = tf.cursor.mtime.map(DateTime::<Utc>::from);
             for s in tf.parser.sessions() {
@@ -236,6 +239,7 @@ impl Engine {
                 let uid = input.uid();
                 // The same id in two files (e.g. resumed sessions): keep the most recent one.
                 if inputs.get(&uid).is_none_or(|(_, l)| *l < last) {
+                    self.session_paths.insert(uid.clone(), path.clone());
                     inputs.insert(uid, (input, last));
                 }
             }
@@ -250,5 +254,10 @@ impl Engine {
         for (_, (input, _)) in inputs {
             agg.upsert(input);
         }
+    }
+
+    /// Exact files selected during aggregation, including sessions sharing one Claude log.
+    pub fn session_paths(&self) -> &BTreeMap<String, PathBuf> {
+        &self.session_paths
     }
 }

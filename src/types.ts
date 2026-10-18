@@ -108,6 +108,22 @@ export interface Detail {
   sessions: UnifiedSession[];
 }
 
+export interface TokenUsage {
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  cacheCreationInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface TokenReport {
+  session: TokenUsage | null;
+  includingSubagents: TokenUsage | null;
+  subagentCount: number;
+  unknownCount: number;
+  failedCount: number;
+}
+
 export type Ev =
   | { upserts: ProjectActivity[]; removes: string[]; order: string[] }
   | { key: string }

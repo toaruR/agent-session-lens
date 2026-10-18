@@ -12,6 +12,37 @@ use std::time::{Duration, SystemTime};
 const HELLO1: &str = r#"{"type":"hello","protocol":1,"helperVersion":"0.1","distro":"Ubuntu","home":"/home/u","now":"2026-01-01T00:00:00Z"}"#;
 const HELLO2: &str = r#"{"type":"hello","protocol":2,"helperVersion":"0.1","distro":"Ubuntu","home":"/home/u","now":"2026-01-01T00:00:00Z"}"#;
 
+#[test]
+fn output_delivered_during_exit_poll_is_ingested_before_drop() {
+    struct TailLauncher;
+    struct TailProcess { polled: bool }
+    impl HelperProcess for TailProcess {
+        fn poll_exit(&mut self) -> Option<HelperExit> {
+            self.polled = true;
+            Some(HelperExit::Code(EXIT_USAGE))
+        }
+        fn read_stdout(&mut self) -> Vec<u8> {
+            if self.polled {
+                format!("{}\n{}\n", HELLO1, upsert("tail")).into_bytes()
+            } else {
+                Vec::new()
+            }
+        }
+        fn kill(&mut self) {}
+    }
+    impl Launcher for TailLauncher {
+        fn launch(&self, _: &[String]) -> Result<Box<dyn HelperProcess>, LaunchError> {
+            Ok(Box::new(TailProcess { polled: false }))
+        }
+    }
+    let mut s = Supervisor::new("Ubuntu", &Settings::default(), Arc::new(TailLauncher),
+        Arc::new(FakeClock::new(SystemTime::UNIX_EPOCH)));
+    s.tick(true);
+    s.tick(true);
+    assert_eq!(s.sessions().len(), 1);
+    assert_eq!(s.health().unwrap().top_diagnostics[0].code, USAGE_ERROR);
+}
+
 fn upsert(id: &str) -> String {
     format!(
         r#"{{"type":"session_upsert","session":{{"sessionUid":"wsl:Ubuntu:claude:{id}","nativeId":"{id}","agent":"claude_code","sourceId":"wsl:Ubuntu:claude","origin":{{"kind":"wsl","distro":"Ubuntu"}},"lastActivitySource":"event","projects":[],"status":{{"value":"idle","reason":"r","confidence":"high","stale":false,"autoReview":false}},"currentTask":{{"title":"t"}},"hierarchy":{{"childUids":[],"kind":"top_level"}},"health":{{"completeness":"complete","diagnostics":[]}}}}}}"#

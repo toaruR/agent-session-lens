@@ -17,6 +17,7 @@ Prerequisites: Rust (stable), Node.js, and Tauri prerequisites (e.g., WebView2 o
 npm install
 npm run tauri dev     # Development mode
 npm run build         # Type check + frontend build
+npm run tauri -- build --no-bundle # Release executable with embedded frontend
 cargo test --workspace
 ```
 
@@ -28,7 +29,24 @@ cargo test --workspace
 
 ## WSL Helper
 
-Logs inside WSL distributions are streamed as normalized NDJSON by the Linux-side `lens-wsl-helper` (default `/usr/local/bin/lens-wsl-helper`, configurable via `helperPath` in `settings.json`). Build with `cargo build -p lens-wsl-helper --release` and place it in each distribution. The host launches and monitors it via `wsl.exe`.
+Logs inside WSL distributions are streamed as normalized NDJSON by the Linux-side `lens-wsl-helper` (default `/usr/local/bin/lens-wsl-helper`, configurable via `helperPath` in `settings.json`). The host launches and monitors it via `wsl.exe`.
+
+Install in each distribution to monitor, from PowerShell at the repository root:
+
+```powershell
+./scripts/install-wsl-helper.ps1 -Distro Ubuntu
+```
+
+This builds with Rust **inside the selected WSL distribution**, installs the Linux executable with WSL root into `/usr/local/bin`, and checks `--version`. Rust and a C compiler must already be installed there; Cargo may download dependencies. A Windows `cargo build` cannot supply this Linux helper. Installation starts the selected distribution; monitoring leaves stopped distributions asleep. `helper_not_found` means the configured executable is missing. The running app retries after installation; a host code update requires restarting the rebuilt app.
+
+Verify the complete Windows-to-WSL ingest path against existing logs:
+
+```powershell
+$env:LENS_TEST_DISTRO = 'Ubuntu'
+cargo test -p lens-core --test real_helper_process real_wsl_reads_existing_sources -- --ignored --nocapture
+```
+
+This reports source health even when all logs are outside the 7-day initial scan window (`skippedOldFiles`). To additionally require sessions, run the ignored test `real_wsl_ingests_existing_sessions` against recent logs; `LENS_TEST_CLAUDE_ROOT` and `LENS_TEST_CODEX_ROOT` can select temporary Linux fixture directories without changing settings or agent logs.
 
 ## Documentation
 

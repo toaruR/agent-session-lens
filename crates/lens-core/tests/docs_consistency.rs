@@ -47,7 +47,7 @@ fn handler_commands() -> Vec<String> {
 #[test]
 fn doc_lists_every_tauri_command_and_no_extra() {
     let cmds = handler_commands();
-    assert_eq!(cmds.len(), 5, "doc states exactly 5 commands: {cmds:?}");
+    assert_eq!(cmds.len(), 6, "doc states exactly 6 commands: {cmds:?}");
     let d = doc();
     let m = missing(&d, &cmds);
     assert!(m.is_empty(), "commands missing from doc: {m:?}");

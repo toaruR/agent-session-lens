@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { relativeTime, updatingLabel } from "./format";
-import type { Agent, Detail, IpcError, ProjectActivity, SourceHealth, SourceState, StatusValue, UnifiedSession } from "./types";
+import { newestFirst } from "./sessionOrder";
+import type { Agent, Detail, IpcError, ProjectActivity, SourceHealth, SourceState, StatusValue, TokenReport, TokenUsage, UnifiedSession } from "./types";
 
 // All log-derived strings are rendered as React text nodes only (architecture-v5 section 9).
 
@@ -81,6 +82,7 @@ function useLens(selected: string | null) {
   const [projects, setProjects] = useState<ProjectActivity[] | null>(null);
   const [health, setHealth] = useState<SourceHealth[] | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [tokenRevision, setTokenRevision] = useState(0);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
 
@@ -102,6 +104,7 @@ function useLens(selected: string | null) {
     if (!isTauri()) return;
     let dead = false;
     const unlisteners: Array<() => void> = [];
+    let tokenTimer: ReturnType<typeof setTimeout> | undefined;
     const cancelled = () => dead;
     const sub = async <P,>(name: string, fn: (p: P) => void) => {
       const u = await listen<P>(name, (e) => fn(e.payload));
@@ -110,6 +113,11 @@ function useLens(selected: string | null) {
     };
     void sub<ProjectsChanged>("projects_changed", (p) => setProjects((prev) => applyProjects(prev ?? [], p)));
     void sub<{ key: string }>("project_detail_changed", (p) => {
+      // A descendant may belong to a different project from the open parent.
+      if (tokenTimer === undefined) tokenTimer = setTimeout(() => {
+        tokenTimer = undefined;
+        if (!dead) setTokenRevision((revision) => revision + 1);
+      }, 1000);
       if (p.key === selectedRef.current) loadDetail(p.key);
     });
     void sub<{ sources: SourceHealth[] }>("health_changed", (p) => setHealth(p.sources));
@@ -121,6 +129,7 @@ function useLens(selected: string | null) {
       .catch(() => {});
     return () => {
       dead = true;
+      clearTimeout(tokenTimer);
       unlisteners.forEach((u) => u());
     };
   }, [loadDetail]);
@@ -129,7 +138,7 @@ function useLens(selected: string | null) {
     if (isTauri()) loadDetail(selected);
   }, [selected, loadDetail]);
 
-  return { projects, health, detail };
+  return { projects, health, detail, tokenRevision };
 }
 
 function ageSeconds(iso: string | undefined, now: number): number | null {
@@ -196,28 +205,111 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function SessionCard({ s, now }: { s: UnifiedSession; now: number }) {
+function SessionTokens({ s, revision }: { s: UnifiedSession; revision: string }) {
+  const [report, setReport] = useState<TokenReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let dead = false;
+    setLoading(true);
+    setError(null);
+    invoke<TokenReport>("get_session_tokens", { sessionUid: s.sessionUid })
+      .then((result) => { if (!dead) setReport(result); })
+      .catch((e: unknown) => { if (!dead) setError(typeof e === "string" ? e : "トークン数を取得できませんでした"); })
+      .finally(() => { if (!dead) setLoading(false); });
+    return () => { dead = true; };
+  }, [s.sessionUid, revision, attempt]);
+  const partial = !!report && report.unknownCount + report.failedCount > 0;
+  const hasChildren = !!report && report.subagentCount > 0;
+  const rows: Array<[string, keyof TokenUsage]> = [
+    ["合計", "totalTokens"], ["キャッシュ入力", "cachedInputTokens"], ["通常入力", "uncachedInputTokens"],
+    ["キャッシュ作成", "cacheCreationInputTokens"], ["出力（推論を含む）", "outputTokens"],
+  ];
+  const value = (usage: TokenUsage | null, key: keyof TokenUsage) => usage ? usage[key].toLocaleString("ja-JP") : "不明";
+  return (
+    <Field label="トークン数">
+      <div aria-live="polite">
+        {loading && <div className="text-xs text-zinc-500">計算中…</div>}
+        {error && <div className="text-xs text-rose-600">{error}</div>}
+        {!loading && !error && report && !report.session && <div className="text-xs text-zinc-500">不明（ログに使用量の記録がありません）</div>}
+        {report && <>
+          <table className="w-full text-xs tabular-nums">
+            <thead><tr className="text-zinc-500"><th className="text-left font-normal">内訳</th><th className="text-right font-normal">単体</th>{hasChildren && <th className="text-right font-normal">子孫込み{partial ? "（判明分）" : ""}</th>}</tr></thead>
+            <tbody>{rows.map(([label, key]) => <tr key={key} className={key === "totalTokens" ? "font-semibold" : ""}>
+              <th scope="row" className="py-0.5 text-left font-normal">{label}</th>
+              <td className="text-right">{value(report.session, key)}</td>
+              {hasChildren && <td className="text-right">{value(report.includingSubagents, key)}</td>}
+            </tr>)}</tbody>
+          </table>
+          {hasChildren && <div className="mt-1 text-xs text-zinc-500">子・孫以降 {report.subagentCount} セッションを含む</div>}
+          {hasChildren && partial && <div className="text-xs text-amber-600">不明 {report.unknownCount} 件・取得失敗 {report.failedCount} 件（合計は判明分）</div>}
+        </>}
+        {!loading && (error || partial) && <button type="button" className="mt-1 text-xs text-sky-600 underline" onClick={() => setAttempt((a) => a + 1)}>再試行</button>}
+      </div>
+    </Field>
+  );
+}
+
+function SessionCard({ s, now, latest, tokenRevision }: { s: UnifiedSession; now: number; latest: boolean; tokenRevision: string }) {
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
+  const expanded = userExpanded ?? latest;
   const age = ageSeconds(s.lastActivityAt, now);
   const t = s.currentTask;
   return (
-    <div className="mb-3 rounded border border-zinc-200 p-2 text-sm dark:border-zinc-800">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="font-semibold">{AGENT_LABEL[s.agent]}</span>
-        <StatusBadge s={s} />
-        <span className="text-xs text-zinc-500">{s.hierarchy.kind}</span>
-        <span className="ml-auto text-xs text-zinc-500">{age === null ? "—" : relativeTime(age, s.lastActivitySource)}</span>
-      </div>
-      <Field label="状態の根拠">{`${s.status.reason} (確度 ${s.status.confidence})`}</Field>
-      {t.activeTool && <Field label="実行中のツール">{`${t.activeTool.name}: ${t.activeTool.input}`}</Field>}
-      <Field label="最初の依頼">{t.title ?? "—"}</Field>
-      <Field label="直近の依頼">{t.lastUserMessage ?? "—"}</Field>
-      <Field label="直近の応答">{t.lastAssistantMessage ?? "—"}</Field>
-      <Field label="プロジェクト">{s.projects.length ? s.projects.map((p) => `${p.displayPath} [${p.attribution}]`).join("\n") : "帰属不明"}</Field>
-      <Field label="健全性">
-        {s.health.completeness}
-        {s.health.diagnostics.length > 0 && " · " + s.health.diagnostics.map((d) => `${d.code}×${d.count}`).join(", ")}
-      </Field>
-      <Field label="ID">{s.sessionUid}</Field>
+    <details open={expanded} className="group/session mb-3 rounded border border-zinc-200 text-sm dark:border-zinc-800">
+      <summary onClick={(e) => { e.preventDefault(); setUserExpanded(!expanded); }} className="cursor-pointer list-none rounded p-2 hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-sky-500 dark:hover:bg-zinc-800 [&::-webkit-details-marker]:hidden">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="text-xs text-zinc-500">{expanded ? "▼" : "▶"}</span>
+          <StatusBadge s={s} />
+          <span className="text-xs text-zinc-500">{s.hierarchy.kind}</span>
+          <span className="ml-auto text-xs text-zinc-500">{age === null ? "—" : relativeTime(age, s.lastActivitySource)}</span>
+        </div>
+        <div className="mt-1 truncate font-medium" title={t.title ?? s.nativeId}>{t.title ?? s.nativeId}</div>
+      </summary>
+      {expanded && <div className="border-t border-zinc-200 p-2 dark:border-zinc-800">
+        <SessionTokens s={s} revision={tokenRevision} />
+        <Field label="状態の根拠">{`${s.status.reason} (確度 ${s.status.confidence})`}</Field>
+        {t.activeTool && <Field label="実行中のツール">{`${t.activeTool.name}: ${t.activeTool.input}`}</Field>}
+        <Field label="最初の依頼">{t.title ?? "—"}</Field>
+        <Field label="直近の依頼">{t.lastUserMessage ?? "—"}</Field>
+        <Field label="直近の応答">{t.lastAssistantMessage ?? "—"}</Field>
+        <Field label="プロジェクト">{s.projects.length ? s.projects.map((p) => `${p.displayPath} [${p.attribution}]`).join("\n") : "帰属不明"}</Field>
+        <Field label="健全性">
+          {s.health.completeness}
+          {s.health.diagnostics.length > 0 && " · " + s.health.diagnostics.map((d) => `${d.code}×${d.count}`).join(", ")}
+        </Field>
+        <Field label="ID">{s.sessionUid}</Field>
+      </div>}
+    </details>
+  );
+}
+
+function AgentSessions({ sessions, now, revision }: { sessions: UnifiedSession[]; now: number; revision: number }) {
+  const groups = new Map<Agent, UnifiedSession[]>();
+  const ordered = newestFirst(sessions);
+  const latestUid = ordered[0]?.sessionUid;
+  const tokenRevision = String(revision);
+  for (const session of ordered) {
+    const group = groups.get(session.agent) ?? [];
+    group.push(session);
+    groups.set(session.agent, group);
+  }
+
+  return (
+    <div className="space-y-3">
+      {[...groups].map(([agent, agentSessions]) => (
+        <details key={agent} open className="group rounded border border-zinc-200 dark:border-zinc-800">
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded p-2 text-sm hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-sky-500 dark:hover:bg-zinc-800 [&::-webkit-details-marker]:hidden">
+            <span aria-hidden="true" className="text-xs text-zinc-500 transition-transform group-open:rotate-90">▶</span>
+            <span className="font-semibold">{AGENT_LABEL[agent]}</span>
+            <span className="ml-auto text-xs text-zinc-500">{agentSessions.length}件</span>
+          </summary>
+          <div className="border-t border-zinc-200 p-2 [&>div:last-child]:mb-0 dark:border-zinc-800">
+            {agentSessions.map((s) => <SessionCard key={s.sessionUid} s={s} now={now} latest={s.sessionUid === latestUid} tokenRevision={tokenRevision} />)}
+          </div>
+        </details>
+      ))}
     </div>
   );
 }
@@ -225,7 +317,7 @@ function SessionCard({ s, now }: { s: UnifiedSession; now: number }) {
 function HealthPanel({ sources, now }: { sources: SourceHealth[]; now: number }) {
   // Every source is always listed with its state and counts (zeros included), so a format change is never hidden.
   return (
-    <div className="grid grid-cols-2 gap-3 text-xs">
+    <div className="grid grid-cols-1 gap-3 text-xs md:grid-cols-2">
       {sources.map((s) => {
         const age = ageSeconds(s.lastScanAt, now);
         return (
@@ -252,7 +344,9 @@ function HealthPanel({ sources, now }: { sources: SourceHealth[]; now: number })
 export default function App() {
   const now = useNow();
   const [selected, setSelected] = useState<string | null>(null);
-  const { projects, health, detail } = useLens(selected);
+  const [healthExpanded, setHealthExpanded] = useState(false);
+  const { projects, health, detail, tokenRevision } = useLens(selected);
+  const healthySources = health?.filter((source) => source.state === "ok").length ?? 0;
 
   if (!isTauri()) {
     return <div className="p-6 text-sm">このページは Tauri アプリの中で表示してください（npm run tauri dev）。</div>;
@@ -262,20 +356,33 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen flex-col gap-3 p-3">
-      <header className="flex items-center justify-between">
+    <div className="flex h-dvh flex-col gap-3 overflow-hidden p-3">
+      <header className="flex shrink-0 items-center justify-between">
         <h1 className="text-lg font-semibold">Agent Session Lens</h1>
       </header>
       <div className="flex min-h-0 flex-1 gap-3">
-        <main className="min-w-0 flex-1 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <main aria-label="プロジェクト一覧" className="min-w-0 flex-1 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
           <ProjectList projects={projects} selected={selected} onSelect={setSelected} now={now} />
         </main>
-        <aside className="w-96 shrink-0 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
-          {detail ? detail.sessions.map((s) => <SessionCard key={s.sessionUid} s={s} now={now} />) : <div className="text-sm text-zinc-500">プロジェクトを選択してください</div>}
+        <aside className="w-[35%] max-w-96 shrink-0 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+          {detail ? <AgentSessions key={detail.project.key} sessions={detail.sessions} now={now} revision={tokenRevision} /> : <div className="text-sm text-zinc-500">プロジェクトを選択してください</div>}
         </aside>
       </div>
-      <footer className="rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
-        <HealthPanel sources={health ?? []} now={now} />
+      <footer className="flex max-h-[30dvh] min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <button
+          type="button"
+          aria-expanded={healthExpanded}
+          aria-controls="source-health-details"
+          onClick={() => setHealthExpanded((expanded) => !expanded)}
+          className="flex w-full shrink-0 cursor-pointer items-center gap-3 px-3 py-2 text-left text-xs hover:bg-zinc-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 dark:hover:bg-zinc-800"
+        >
+          <span className="font-medium">ログ収集の状態</span>
+          <span className="text-zinc-500">{health ? `正常 ${healthySources} / 全 ${health.length}` : "読み込み中…"}</span>
+          <span className="ml-auto text-zinc-500">{healthExpanded ? "詳細を閉じる ▲" : "詳細を表示 ▼"}</span>
+        </button>
+        <div id="source-health-details" hidden={!healthExpanded} className="min-h-0 overflow-auto border-t border-zinc-200 p-3 dark:border-zinc-800">
+          <HealthPanel sources={health ?? []} now={now} />
+        </div>
       </footer>
     </div>
   );

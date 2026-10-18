@@ -17,6 +17,7 @@ Claude Code と Codex のローカルセッションログ（読み取り専用�
 npm install
 npm run tauri dev     # 開発起動
 npm run build         # 型検査 + フロントエンドビルド
+npm run tauri -- build --no-bundle # 画面を埋め込んだ配布用実行ファイル
 cargo test --workspace
 ```
 
@@ -28,7 +29,26 @@ cargo test --workspace
 
 ## WSL ヘルパー
 
-WSL ディストロ内のログは Linux 側の `lens-wsl-helper`（既定 `/usr/local/bin/lens-wsl-helper`、`settings.json` の `helperPath` で変更可）が正規化 NDJSON として送ります。`cargo build -p lens-wsl-helper --release` で作成し、各ディストロへ配置してください。ホスト側は `wsl.exe` 経由で起動・監視します。
+WSL ディストロ内のログは Linux 側の `lens-wsl-helper`（既定 `/usr/local/bin/lens-wsl-helper`、`settings.json` の `helperPath` で変更可）が正規化 NDJSON として送ります。ホスト側は `wsl.exe` 経由で起動・監視します。
+
+監視する各ディストロに、リポジトリのルートから PowerShell で導入します。
+
+```powershell
+./scripts/install-wsl-helper.ps1 -Distro Ubuntu
+```
+
+指定した WSL 内の Rust でビルドし、WSL の root 権限で `/usr/local/bin` に配置して `--version` を確認します。WSL 側に Rust と C コンパイラーが必要です。Cargo が依存パッケージをダウンロードする場合があります。Windows 側でビルドした実行ファイルは Linux 用ヘルパーには使えません。導入時は指定ディストロを起動しますが、通常の監視では停止中のディストロを起こしません。
+
+`helper_not_found` はヘルパー未配置を表します。配置後はアプリが自動で再試行します。ホスト側コードを更新した場合は、アプリを再ビルドして再起動してください。
+
+実ログで Windows までの受信を確認できます。
+
+```powershell
+$env:LENS_TEST_DISTRO = 'Ubuntu'
+cargo test -p lens-core --test real_helper_process real_wsl_reads_existing_sources -- --ignored --nocapture
+```
+
+初回走査は過去7日が対象です。全ログが古い場合も収集元の正常応答と `skippedOldFiles` を確認できます。セッション到達も必須にする場合は `real_wsl_ingests_existing_sessions` を実行してください。`LENS_TEST_CLAUDE_ROOT` と `LENS_TEST_CODEX_ROOT` で一時的な Linux 側の検証用ディレクトリを指定でき、アプリ設定や実ログは変更しません。
 
 ## ドキュメント
 

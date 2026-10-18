@@ -142,6 +142,12 @@ fn parse_ts(s: &Option<String>) -> Option<DateTime<chrono::FixedOffset>> {
 }
 
 impl Aggregator {
+    pub fn origin_available(&self, origin: &Origin) -> bool {
+        match (&origin.kind, &origin.distro) {
+            (OriginKind::Wsl, Some(d)) => !self.unavailable_distros.contains(d),
+            _ => true,
+        }
+    }
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
             clock,

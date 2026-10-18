@@ -7,6 +7,8 @@
 
 use std::io::{self, Read};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver as OutputReceiver};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 use crate::change_detector::Backoff;
@@ -85,15 +87,65 @@ pub struct WslLauncher;
 
 struct RealProcess {
     sp: SpawnedChild,
+    stdout: Option<OutputReceiver<Vec<u8>>>,
+    stdout_reader: JoinHandle<()>,
+    stderr_reader: Option<JoinHandle<Vec<u8>>>,
+}
+
+impl RealProcess {
+    fn new(mut sp: SpawnedChild) -> Self {
+        // Drain both pipes independently: the ingest loop must never block on read,
+        // and a full stderr pipe must not prevent the helper from making progress.
+        let mut out = sp.child.stdout.take().expect("piped stdout");
+        let mut err = sp.child.stderr.take().expect("piped stderr");
+        let (tx, stdout) = mpsc::sync_channel(32);
+        let stdout_reader = thread::spawn(move || {
+            let mut buf = [0; 8192];
+            loop {
+                match out.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => if tx.send(buf[..n].to_vec()).is_err() { break; },
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut captured = Vec::new();
+            let mut buf = [0; 4096];
+            loop {
+                match err.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let keep = n.min(4096 - captured.len());
+                        captured.extend_from_slice(&buf[..keep]);
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            captured
+        });
+        Self { sp, stdout: Some(stdout), stdout_reader, stderr_reader: Some(stderr_reader) }
+    }
+}
+
+impl Drop for RealProcess {
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 impl HelperProcess for RealProcess {
     fn poll_exit(&mut self) -> Option<HelperExit> {
         let st = self.sp.child.try_wait().ok().flatten()?;
-        let mut err = String::new();
-        if let Some(se) = self.sp.child.stderr.take() {
-            let _ = se.take(4096).read_to_string(&mut err);
+        // Readers may still be delivering the final bytes after process exit.
+        if !self.stdout_reader.is_finished()
+            || self.stderr_reader.as_ref().is_some_and(|h| !h.is_finished()) {
+            return None;
         }
+        let err = self.stderr_reader.take().and_then(|h| h.join().ok()).unwrap_or_default();
+        let err = String::from_utf8_lossy(&err);
         let lower = err.to_ascii_lowercase();
         if lower.contains("no such file") || lower.contains("not found") || lower.contains("enoent") {
             return Some(HelperExit::NotFound);
@@ -104,7 +156,12 @@ impl HelperProcess for RealProcess {
     fn kill(&mut self) {
         let _ = self.sp.child.kill();
         self.sp.close_job();
+        // Unblock a reader waiting to send into a full channel during shutdown.
+        self.stdout.take();
         let _ = self.sp.child.wait();
+    }
+    fn read_stdout(&mut self) -> Vec<u8> {
+        self.stdout.as_ref().map(|rx| rx.try_iter().take(32).flatten().collect()).unwrap_or_default()
     }
 }
 
@@ -112,7 +169,7 @@ impl Launcher for WslLauncher {
     fn launch(&self, argv: &[String]) -> Result<Box<dyn HelperProcess>, LaunchError> {
         let (prog, args) = argv.split_first().ok_or(LaunchError::Other)?;
         match process::spawn(prog, args) {
-            Ok(sp) => Ok(Box::new(RealProcess { sp })),
+            Ok(sp) => Ok(Box::new(RealProcess::new(sp))),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Err(LaunchError::NotFound),
             Err(_) => Err(LaunchError::Other),
         }
@@ -203,8 +260,9 @@ impl Supervisor {
         }
         if let Some(c) = self.child.as_mut() {
             if let Some(exit) = c.poll_exit() {
-                self.child = None;
                 // Output written just before exiting still counts.
+                self.drain_stdout();
+                self.child = None;
                 match exit {
                     HelperExit::Code(EXIT_USAGE) => {
                         self.fatal = Some(USAGE_ERROR);

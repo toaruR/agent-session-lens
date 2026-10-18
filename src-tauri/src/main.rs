@@ -5,7 +5,7 @@ mod ingest;
 mod state;
 mod wsl;
 
-use commands::{get_health, get_project_detail, list_projects, set_distro_enabled, set_source_root};
+use commands::{get_health, get_project_detail, get_session_tokens, list_projects, set_distro_enabled, set_source_root};
 use lens_core::aggregator::Aggregator;
 use lens_core::clock::{Clock, SystemClock};
 use lens_core::ipc::Phase;
@@ -25,6 +25,8 @@ fn main() {
         store: Mutex::new(SettingsStore::load(RealFs, settings_dir())),
         known_distros: Mutex::new(Vec::new()),
         known_sources: Mutex::new(Vec::new()),
+        session_paths: Mutex::new(Default::default()),
+        tokens: Mutex::new(lens_core::tokens::TokenCache::load(settings_dir().join("session-tokens.json"))),
     };
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -36,6 +38,7 @@ fn main() {
             list_projects,
             get_project_detail,
             get_health,
+            get_session_tokens,
             set_distro_enabled,
             set_source_root
         ])
