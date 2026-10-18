@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI Variable", "Segoe UI", "Yu Gothic UI", system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  @apply bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+}

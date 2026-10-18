@@ -1,0 +1,2298 @@
+{
+  "plan_version": 1,
+  "summary": "Goal: take the asl-core v3 prototype to the architecture-v5 design (lens-core crate, strict reader, Claude/Codex parsers, status table, Change Detector with fake Clock, Project Resolver, redaction, settings.json, lens-wsl-helper, NDJSON receiver, helper supervisor, IPC, Tauri wiring, UI). 34 tasks. EXECUTION ORDER (unique, ascending id): T001 rename > T002 finish-rename > T003 consts > T004 change-detector > T005 reader > T006 schema > T007 resolver > T008 helper-cli > T009 clock-offset > T010 redact > T011 process > T012 claude > T013 codex > T014 reader-2 > T015 ndjson > T016 settings > T017 distro > T018 claude-2 > T019 codex-2 > T020 ndjson-2 > T021 status-table > T022 initial-scan > T023 aggregator > T024 helper-serve > T025 read-only(F22) > T026 aggregator-2 > T027 sup1 > T028 ipc-1 > T029 sup2 > T030 sup3 > T031 ipc-2 > T032 tauri > T033 ui > T034 audit. ORDERING RULE: layer (1 + max layer of dependencies) ascending, then risk high > medium > low, then title in ASCII order; ids follow exactly this order, so every dependency has a smaller id. RISK PLACEMENT: the minimal prerequisite chain is T001 rename, T002 finish-rename (7 files name the old crate, over the 5-change limit, hence two tasks) and T003 consts; all three are low risk and 1 round. The riskiest spikes follow immediately and depend only on what they use: change detector T004 (file watching; needs consts) and reader T005 (parsing I/O; needs consts) are the first layer after the chain (layer 4); process wrapper T011 comes right after the detector because its F9 watchdog needs FakeClock from clock.rs; Claude T012 and Codex T013 parsers depend on reader part 1 only; WSL distro polling T017 is rated high (Lxss registry and wsl.exe output are Windows-only and untestable in CI) and depends only on schema and process (the disabled list is a parameter), so it sits at layer 6, the earliest layer its dependencies allow (right after the process wrapper), ahead of the supervisor that consumes it. Big tasks were split so none exceeds 6 acceptance lines or 2 estimated rounds: reader, Claude, Codex, NDJSON, aggregator and IPC each have a part 1/2 and 2/2; other long lists were merged. SAFE STOP POINTS: every task ends with cargo test --workspace green (npm run build is verified where the frontend changes and unchanged elsewhere), so stopping after any task leaves a building, passing repository. Each task's stop state names what is usable, an rg check proving what is not usable yet (exit 1 while the downstream tests/wiring are absent; valid at that task's own stop point only), and how to revert. REVERT: git revert of a task's commit, after reverting its dependents (later ids first); no task changes a data format. Persisted state: only %APPDATA%\\agent-session-lens\\settings.json (plus .bad) is ever written, and only by the app at run time via the settings/IPC path; T016 (store, temp dir in tests), T031 (first writer), T030 (reader only) and T032 (app start-up) touch it; reverting them never touches the file, delete it by hand to reset. Not usable at stop (but still green): after T032 (Tauri wiring) the backend is live but the old UI is empty because the get_snapshot shim returns null, so the app is user-usable only after T033. T032 keeps a get_snapshot shim (src/App.tsx still invokes it); T033 removes the shim and its caller together. VERIFY COMMANDS are POSIX shell (Git Bash on the Windows host), run from the repository root; commands that can run on the current v3 tree were pre-run and their observed exit codes are listed in the assumptions. Windows-only parts (Job Object, Lxss registry, wsl.exe) are cfg(windows) with portable fakes and run on this Windows host. Out of scope per the design: CI, packaging, helper distribution, operations.",
+  "assumptions": [
+    "Agent Session Lens アーキテクチャ設計書 v5: not required because Document title and scope statement; no implementation decision (scope is carried by the numbered sections)",
+    "Coverage: 1. 原則と構成 -> T005,T006,T014,T022,T025,T034",
+    "Coverage: 2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する） -> T001,T002,T003,T004,T009,T010,T016,T017,T021,T022",
+    "Coverage: 3. 判定規則と検算 -> T021",
+    "Coverage: 3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する） -> T012,T013,T018,T019,T021,T022,T023,T026,T033",
+    "Coverage: 3.2 clockOffset 補正 -> T009",
+    "Coverage: 3.3 数値の往復検算 -> T004,T005,T014,T023,T026,T027,T029,T034",
+    "Coverage: 4. 「更新」の定義 -> T012,T013,T018,T019,T023,T026,T033",
+    "Coverage: 5. エージェント別仕様 -> T012,T013,T018,T019",
+    "Coverage: 6. WSL ヘルパー -> T007,T011,T017,T024,T027,T029",
+    "Coverage: 6.1 設定（settings.json） -> T016,T027,T030",
+    "Coverage: 6.2 ヘルパー CLI -> T008,T024,T029",
+    "Coverage: 6.3 診断コードと NDJSON 受信 -> T005,T008,T013,T014,T015,T019,T020,T024,T030",
+    "Coverage: 7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義） -> T006,T015,T020,T028,T031,T033",
+    "Coverage: 8. IPC と実装 -> T004,T005,T006,T007,T014,T022,T023,T026,T028,T031,T032",
+    "Coverage: 9. UI と安全 -> T011,T032,T033",
+    "Coverage: 10. プライバシー -> T008,T010,T024,T028,T030,T031",
+    "Coverage: 11. 故障モード対応と受け入れ試験（1 故障 = 1 機構 = 1 試験。pass は期待値との完全一致） -> T025,T034",
+    "Coverage: 12. 防御のトレードオフ -> T004,T007,T009,T010,T011,T015,T016,T017,T020,T021,T023,T026,T027,T028,T030,T031,T034",
+    "Traceability F-id -> task id (part 1/1; '+' = the F-id is split across tasks; final audit task T034 enforces all 54): F1a->T013, F1b->T013, F2->T023, F3->T012, F4->T005, F5->T005, F6->T005, F7->T014, F8a->T004, F8b->T004, F8c->T004, F9->T011, F10a->T009, F10b->T009, F11a->T027, F11b->T027, F11c->T023, F12->T027, F13a->T015+T029, F13b->T015, F13c->T015, F13d->T020, F13e->T020, F13f->T015, F14->T021, F15->T026, F16a->T010, F16b->T010, F16c->T010, F16d->T010, F17->T019, F18->T007, F19->T019+T023, F20->T021, F21->T022, F22->T025, F23->T031, F23a->T007, F23b->T007, F24->T019, F25a->T028, F25b->T023, F25c->T028, F26->T016, F27->T016, F28->T016, F29a->T008+T029, F29b->T008+T029, F29c->T008+T029, F29d->T008+T029, F29e->T024+T029, F30->T010+T031, F31->T030, F32->T030",
+    "Unique execution order (ascending id): T001, T002, T003, T004, T005, T006, T007, T008, T009, T010, T011, T012, T013, T014, T015, T016, T017, T018, T019, T020, T021, T022, T023, T024, T025, T026, T027, T028, T029, T030, T031, T032, T033, T034. DAG layers (layer = 1 + max layer of dependencies): L1: T001; L2: T002; L3: T003; L4: T004,T005,T006,T007,T008,T009,T010; L5: T011,T012,T013,T014,T015,T016; L6: T017,T018,T019,T020; L7: T021; L8: T022; L9: T023,T024,T025; L10: T026; L11: T027,T028; L12: T029,T030,T031; L13: T032; L14: T033; L15: T034. Rule: sort by (layer ascending, risk high>medium>low, title ASCII ascending); ids are assigned in that order, so ascending id is the only order the rule produces and every task's dependencies have smaller ids.",
+    "Test naming: every test fn named in an acceptance line is created by that task; the verify list `-- --list | rg -c` command proves the names exist (a plain name filter that matches nothing would still exit 0). Hermetic: all fixtures are generated in the tests with synthetic values, no real logs, no wall-clock sleeps (fake Clock). Windows-only code (share mode, Job Object, Lxss registry, wsl.exe) is cfg(windows) with portable fakes; the development host is Windows, so the cfg(windows) tests run here, and other hosts compile the fallbacks.",
+    "Cargo.lock is regenerated by cargo and never hand-edited, so it is not listed in changes. The Linux build of lens-wsl-helper is not cross-compiled in this plan; its logic is tested on the host build with injected HOME, distro and writers (design scope excludes helper distribution and CI).",
+    "Verify shell and pre-run (1/2): every verify command is POSIX shell (Git Bash on the Windows host, repository root as cwd, rg and node on PATH). Observed exit codes of the pre-run on the current v3 tree: cargo test --workspace 0 (39 tests), cargo check -p agent-session-lens 0, cargo build -p agent-session-lens 0, npm run build 0, tauri.conf.json CSP node check 0, Command::new scan over crates and src-tauri/src 1, write-open scan 1, every Not-usable rg check 1 (as required).",
+    "Verify shell and pre-run (2/2): cargo clippy with plain -D warnings exits 101 on the v3 tree (8 existing lints in codex.rs, engine.rs, session.rs), so the plan's clippy gates also allow exactly those 5 lint names and exit 0 when pre-run (-p agent-session-lens and --workspace --all-targets). The cargo metadata node assertions were run on a scratch copy with the rename applied: the T001 form exits 0 with the aliases, the T002 form exits 1 with the aliases and 0 after alias removal. The 21 other commands assert post-task state (files or code not yet present) and could not pass on the v3 tree; their observed codes (0, 1 or 2) match the unmet deliverable."
+  ],
+  "tasks": [
+    {
+      "id": "T001",
+      "title": "Rename package asl-core to lens-core (directory, manifests, temporary aliases)",
+      "intent": "Rename the package with the fewest edits: git mv crates/asl-core crates/lens-core; in the workspace Cargo.toml set members to crates/lens-core and src-tauri; in the crate manifest set name = \"lens-core\" plus a TEMPORARY [lib] name = \"asl_core\"; in src-tauri/Cargo.toml use `asl-core = { package = \"lens-core\", path = \"../crates/lens-core\" }`. Source files stay untouched, so this task has only 4 edits. Complete grep of the old name outside docs/, target/ and Cargo.lock: Cargo.toml, crates/asl-core/Cargo.toml, crates/asl-core/examples/smoke.rs, crates/asl-core/tests/ingest.rs, src-tauri/Cargo.toml, src-tauri/src/main.rs, src/types.ts (comment only). smoke.rs, ingest.rs and main.rs are fixed by T002; the types.ts comment by T033; Cargo.lock is regenerated by cargo, never hand-edited. Risk (low): only uncertainty is whether the dependency alias plus [lib] name keep the old identifier resolving; cargo check proves it.",
+      "design_refs": [
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）"
+      ],
+      "depends_on": [],
+      "changes": [
+        {
+          "path": "crates/asl-core",
+          "kind": "delete",
+          "note": "git mv crates/asl-core crates/lens-core moves the whole tree (12 src files, tests/ingest.rs, examples/smoke.rs) unchanged"
+        },
+        {
+          "path": "Cargo.toml",
+          "kind": "modify",
+          "note": "workspace members: crates/lens-core, src-tauri"
+        },
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "package name = \"lens-core\"; add temporary [lib] name = \"asl_core\""
+        },
+        {
+          "path": "src-tauri/Cargo.toml",
+          "kind": "modify",
+          "note": "asl-core = { package = \"lens-core\", path = \"../crates/lens-core\" }"
+        }
+      ],
+      "acceptance": [
+        "`cargo metadata --format-version 1 --no-deps | node -e '<assert>'` exits 0: a package named `lens-core` exists whose lib target is named `asl_core` (temporary alias) and no package named `asl-core` remains; `cargo test --workspace` also exits 0.",
+        "`rg -n \"crates/asl-core\" Cargo.toml src-tauri/Cargo.toml` exits 1 (no stale path in either manifest).",
+        "`cargo test -p lens-core --test ingest` exits 0 with the unchanged ingest.rs (still `use asl_core::`, resolved by the temporary [lib] name).",
+        "`cargo check -p agent-session-lens` exits 0 with the unchanged main.rs (`use asl_core::{default_sources, runtime, Snapshot}` resolved by the dependency alias).",
+        "Stop state: package is lens-core, identifier still asl_core via the temporary [lib] name and dependency alias; v3 behaviour unchanged. Not usable yet, observable as `rg -n \"lens_core\" crates src-tauri/src` exits 1 (no source file uses the lens_core identifier yet, the alias keeps asl_core). Revert: `git revert` of this task's commit; restores crates/asl-core and the old manifests including Cargo.lock in one commit; revert rename2 and all later tasks first; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "cargo metadata --format-version 1 --no-deps | node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=JSON.parse(s);const p=m.packages.find(x=>x.name==='lens-core');const l=p&&p.targets.find(t=>t.kind.includes('lib'));process.exit(p&&l&&l.name==='asl_core'&&!m.packages.some(x=>x.name==='asl-core')?0:1)})\"",
+          "expect_exit_code": 0,
+          "note": "Package lens-core, lib target asl_core, no package asl-core."
+        },
+        {
+          "command": "rg -n \"crates/asl-core\" Cargo.toml src-tauri/Cargo.toml",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo check -p agent-session-lens",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"lens_core\" crates src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: no source file uses the lens_core identifier yet, the alias keeps asl_core."
+        }
+      ],
+      "estimate_rounds": 1
+    },
+    {
+      "id": "T002",
+      "title": "Finish rename: drop temporary aliases, use lens_core identifiers everywhere",
+      "intent": "Remove the two temporary shims from T001: delete [lib] name = \"asl_core\" from crates/lens-core/Cargo.toml, change the src-tauri dependency to `lens-core = { path = \"../crates/lens-core\" }`, and switch the identifiers to lens_core in the three Rust sources that name the crate: crates/lens-core/tests/ingest.rs (3 use lines), crates/lens-core/examples/smoke.rs (2 use lines and the doc comment `-p asl-core`), src-tauri/src/main.rs (1 use line). docs/ files keep historical names. Risk (low): pure mechanical rename; a missed identifier fails compilation immediately.",
+      "design_refs": [
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）"
+      ],
+      "depends_on": [
+        "T001"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "remove temporary [lib] name"
+        },
+        {
+          "path": "src-tauri/Cargo.toml",
+          "kind": "modify",
+          "note": "dependency key lens-core, drop package alias"
+        },
+        {
+          "path": "src-tauri/src/main.rs",
+          "kind": "modify",
+          "note": "use lens_core::{default_sources, runtime, Snapshot}"
+        },
+        {
+          "path": "crates/lens-core/tests/ingest.rs",
+          "kind": "modify",
+          "note": "use lens_core:: (3 lines)"
+        },
+        {
+          "path": "crates/lens-core/examples/smoke.rs",
+          "kind": "modify",
+          "note": "use lens_core:: (2 lines) and doc comment -p lens-core"
+        }
+      ],
+      "acceptance": [
+        "`cargo metadata --format-version 1 --no-deps | node -e '<assert>'` exits 0: package `lens-core` has lib target `lens_core` (alias removed) and no package `asl-core` exists.",
+        "`rg -n \"asl[-_]core\" Cargo.toml crates src-tauri/Cargo.toml src-tauri/src` exits 1 (docs/, Cargo.lock and the src/types.ts comment are out of this scope).",
+        "`cargo test -p lens-core --test ingest` exits 0 (same test count as before the rename, only the import path changed).",
+        "`cargo build -p lens-core --examples` exits 0 (smoke.rs compiles under the new name).",
+        "Stop state: rename complete, no alias left, identifiers are lens_core everywhere; every later `-p lens-core` command is valid. Not usable yet, observable as `rg -n \"fn (section2_values_match_design)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit; restores the two aliases and the asl_core identifiers; revert before reverting the rename task; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "cargo metadata --format-version 1 --no-deps | node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const m=JSON.parse(s);const p=m.packages.find(x=>x.name==='lens-core');const l=p&&p.targets.find(t=>t.kind.includes('lib'));process.exit(p&&l&&l.name==='lens_core'&&!m.packages.some(x=>x.name==='asl-core')?0:1)})\"",
+          "expect_exit_code": 0,
+          "note": "Lib target is lens_core after alias removal."
+        },
+        {
+          "command": "rg -n \"asl[-_]core\" Cargo.toml crates src-tauri/Cargo.toml src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo build -p lens-core --examples",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo check -p agent-session-lens",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (section2_values_match_design)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 1
+    },
+    {
+      "id": "T003",
+      "title": "Add consts module defining every section 2 constant once",
+      "intent": "Add crates/lens-core/src/consts.rs with one `pub const` per section 2 row (27 items: the 24 numeric names, R4_WORDS = [TOKEN, SECRET, PASSWORD, API_?KEY, CSRF], SETTINGS_PATH = %APPDATA%\\agent-session-lens\\settings.json, HELPER_PATH = /usr/local/bin/lens-wsl-helper), export it from lib.rs, and replace ad-hoc numeric literals for line limit, scan sizes and stale/recent windows in engine.rs and reader.rs with the names. Later tasks import these names and never repeat a value. Risk (low): the only uncertainty is hidden duplicate literals in the prototype; the rg check below finds them.",
+      "design_refs": [
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）"
+      ],
+      "depends_on": [
+        "T002"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/consts.rs",
+          "kind": "add",
+          "note": "27 pub consts + #[cfg(test)] mod tests"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod consts"
+        },
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "literals -> consts names"
+        },
+        {
+          "path": "crates/lens-core/src/reader.rs",
+          "kind": "modify",
+          "note": "literals -> consts names"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --lib consts::tests::section2_values_match_design` exits 0; the test asserts STALE_SECS=600, RECENT_WRITE_SECS=30, CLOCK_SKEW_MS=5000, REEVAL_SECS=5, MAX_LINE_BYTES=4194304, HEAD_SCAN_BYTES=524288, TAIL_SCAN_BYTES=8388608, DEBOUNCE_MS=200, HOT_WINDOW_SECS=900, HOT_POLL_SECS=2, RECONCILE_SECS=60, INITIAL_SCAN_DAYS=7, DISTRO_POLL_SECS=60, HB_INTERVAL_SECS=10, HB_TIMEOUT_SECS=30, HB_MEDIAN_N=5, BACKOFF_MAX_SECS=60, PROTOCOL_VERSION=1, RESOLVE_MAX_DEPTH=32, TRUNC_TEXT_CHARS=2000, TRUNC_OUT_CHARS=1000, SK_MIN=20, GH_LEN=36, AWS_LEN=16.",
+        "`cargo test -p lens-core --lib consts::tests::section2_strings_match_design` exits 0: R4_WORDS equals [\"TOKEN\",\"SECRET\",\"PASSWORD\",\"API_?KEY\",\"CSRF\"], HELPER_PATH == \"/usr/local/bin/lens-wsl-helper\", SETTINGS_PATH ends with \"agent-session-lens\\\\settings.json\".",
+        "`test \"$(rg -c 'pub const [A-Z0-9_]+:' crates/lens-core/src/consts.rs)\" = 27` exits 0 (each constant defined exactly once).",
+        "`rg -n \"4194304|4_194_304|8388608|8_388_608|524288|524_288\" crates/lens-core/src --glob '!consts.rs'` exits 1 (no duplicated size literal outside consts.rs).",
+        "Stop state: constants centralised in consts.rs, behaviour identical. Not usable yet, observable as `rg -n \"fn (f4_invalid_utf8_line_dropped|f16a_sk_key|schema_file_equals_design_block|hot_poll|f18_windows_key_case_insensitive|f10a_threshold_cases|f29a_usage_errors_exit_2)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting every later task that lists it in depends_on; no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --lib -- --list 2>/dev/null | rg -c '^(consts::tests::section2_values_match_design|consts::tests::section2_strings_match_design): test$')\" = 2",
+          "expect_exit_code": 0,
+          "note": "Asserts all 2 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --lib consts::tests",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "test \"$(rg -c 'pub const [A-Z0-9_]+:' crates/lens-core/src/consts.rs)\" = 27",
+          "expect_exit_code": 0,
+          "note": "Exactly 27 constants."
+        },
+        {
+          "command": "rg -n \"4194304|4_194_304|8388608|8_388_608|524288|524_288\" crates/lens-core/src --glob '!consts.rs'",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f4_invalid_utf8_line_dropped|f16a_sk_key|schema_file_equals_design_block|hot_poll|f18_windows_key_case_insensitive|f10a_threshold_cases|f29a_usage_errors_exit_2)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 1
+    },
+    {
+      "id": "T004",
+      "title": "Injectable Clock and Change Detector",
+      "intent": "Add clock.rs (Clock trait with real and fake implementations) and change_detector.rs: notify events are collapsed per DEBOUNCE_MS (200); files with mtime within HOT_WINDOW_SECS (900) get a (size, mtime) check every HOT_POLL_SECS (2); the root is reconciled every RECONCILE_SECS (60); notify overflow (IN_Q_OVERFLOW, max_user_watches exceeded, ReadDirectoryChangesW overflow) triggers an immediate reconcile; failures use `pub fn backoff_secs(n) = min(2^(n-1), BACKOFF_MAX_SECS)` (n reset to 1 on success), which the supervisor later reuses. Tests drive only the fake Clock with notify disabled; no wall-clock sleeps. Risk (high): file-change notification is the flagged fragile area; real overflow of inotify/ReadDirectoryChangesW cannot be provoked in a unit test, so overflow is injected as an event and only the reaction is tested, the backend mapping (which notify error/flag means overflow) stays unverified.",
+      "design_refs": [
+        "8. IPC と実装",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "3.3 数値の往復検算",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/clock.rs",
+          "kind": "add",
+          "note": "Clock trait, SystemClock, FakeClock"
+        },
+        {
+          "path": "crates/lens-core/src/change_detector.rs",
+          "kind": "add",
+          "note": "debounce, hot poll, reconcile, overflow, backoff_secs"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod clock; pub mod change_detector"
+        },
+        {
+          "path": "crates/lens-core/tests/change_detector.rs",
+          "kind": "add",
+          "note": "fake-Clock tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test change_detector hot_poll` exit 0: F8a: notify disabled, append then FakeClock +1 s -> 0 detections; +2 s total -> 1 detection.",
+        "`cargo test -p lens-core --test change_detector reconcile` exit 0: F8b: new file with notify disabled, FakeClock 59 s -> 0 new files; 60 s -> 1 new file.",
+        "`cargo test -p lens-core --test change_detector overflow` exit 0: F8c: simulated overflow event -> exactly 1 reconcile without advancing the Clock.",
+        "`cargo test -p lens-core --test change_detector backoff` exit 0: backoff_secs(n) for n=1..8 == 1, 2, 4, 8, 16, 32, 60, 60; after a success the next failure waits 1. Second command: `cargo test -p lens-core --test change_detector debounce` exit 0: 5 notify events within 199 ms of FakeClock time -> 1 callback; an event at +200 ms starts a new window (2 callbacks).",
+        "`rg -n \"thread::sleep|Instant::now|SystemTime::now\" crates/lens-core/src/change_detector.rs` exits 1 (all time goes through Clock).",
+        "Stop state: Clock (real and fake) and Change Detector exist as a library; the engine still polls the v3 way. Not usable yet, observable as `rg -n \"fn (f9_child_stdin_null_exits_zero_read_zero|f21_seven_day_boundary|f2_child_idle_after_parent_end_turn|f11a_heartbeat_silence_29_vs_30)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T011, T022, T023, T027); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test change_detector -- --list 2>/dev/null | rg -c '^(hot_poll|reconcile|overflow|backoff|debounce): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test change_detector hot_poll",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test change_detector reconcile",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test change_detector overflow",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test change_detector backoff",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test change_detector debounce",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"thread::sleep|Instant::now|SystemTime::now\" crates/lens-core/src/change_detector.rs",
+          "expect_exit_code": 1,
+          "note": "No direct wall-clock use; rg exits 1."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f9_child_stdin_null_exits_zero_read_zero|f21_seven_day_boundary|f2_child_idle_after_parent_end_turn|f11a_heartbeat_silence_29_vs_30)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T005",
+      "title": "Reader hardening 1/2: strict UTF-8, MAX_LINE_BYTES boundary, partial tail",
+      "intent": "Bring reader.rs to the first half of the section 8 Reader spec: per-line strict UTF-8 (drop + invalid_utf8, no replacement, no CP932 guess); MAX_LINE_BYTES boundary (content 4194304 B handled, 4194305 B dropped with oversized_line, the newline is not counted, newline-less tail kept up to 4194304 B); offset advances only past complete lines (tail without newline buffered, diagnostic incomplete_tail). Risk (high): this is the I/O layer every parser builds on; the boundary cases are exact byte counts and the v3 ingest tests may encode lossy decoding, in which case only those expectations are updated in tests/ingest.rs. File replacement, share mode and the read-only open guard follow in T014.",
+      "design_refs": [
+        "8. IPC と実装",
+        "3.3 数値の往復検算",
+        "6.3 診断コードと NDJSON 受信",
+        "1. 原則と構成"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/reader.rs",
+          "kind": "modify",
+          "note": "strict decode, boundary, tail buffer"
+        },
+        {
+          "path": "crates/lens-core/tests/reader.rs",
+          "kind": "add",
+          "note": "F4-F6 tests with generated fixtures"
+        },
+        {
+          "path": "crates/lens-core/tests/ingest.rs",
+          "kind": "modify",
+          "note": "only if a v3 assertion relied on lossy UTF-8 decoding"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test reader f4_invalid_utf8_line_dropped` exit 0: F4: lines `{\"a\":1}`, bytes 0x82 0xA0 + `\\n`, `{\"a\":2}` -> diagnostics invalid_utf8 == 1 and both neighbours yielded (2 lines).",
+        "`cargo test -p lens-core --test reader f5_max_line_boundary_terminated` exit 0: F5: content of 4194304 B + `\\n` is yielded; content of 4194305 B + `\\n` is dropped, oversized_line == 1, and the following line `{\"ok\":1}` is yielded.",
+        "`cargo test -p lens-core --test reader f5_max_line_boundary_unterminated` exit 0: F5: newline-less tail of 4194304 B is kept (offset unchanged, nothing yielded); a 4194305 B tail is dropped with oversized_line == 1.",
+        "`cargo test -p lens-core --test reader f6_incomplete_tail_holds_offset` exit 0: F6: line without `\\n` -> 0 events and offset unchanged (incomplete_tail info only); after `\\n` is appended -> exactly 1 event and offset == file size.",
+        "Stop state: strict UTF-8, MAX_LINE_BYTES boundary and partial-tail handling live in reader.rs and the engine uses them. Not usable yet, observable as `rg -n \"fn (f3_api_request_blob_not_fully_parsed|f1a_fork_ordinal_excludes_inherited|f13a_protocol_mismatch_stops|f7_file_replaced_on_fileid_change_or_shrink)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T012, T013, T015, T014); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test reader -- --list 2>/dev/null | rg -c '^(f4_invalid_utf8_line_dropped|f5_max_line_boundary_terminated|f5_max_line_boundary_unterminated|f6_incomplete_tail_holds_offset): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test reader",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f3_api_request_blob_not_fully_parsed|f1a_fork_ordinal_excludes_inherited|f13a_protocol_mismatch_stops|f7_file_replaced_on_fileid_change_or_shrink)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T006",
+      "title": "Data model and JSON Schema conformance",
+      "intent": "Add the section 7 types to model.rs ADDITIVELY (ProjectActivity, UnifiedSession incl. status.reason / hierarchy.childUids / currentTask, SourceHealth with all 10 states, Settings, IpcError with 7 codes, In, Detail, Ev, Msg) while the v3 Snapshot types stay, because ingest.rs, runtime.rs and src-tauri still use them until the aggregator and Tauri tasks replace their last callers. Store the draft-07 block of docs/architecture-v5.md section 7 verbatim as crates/lens-core/schema/lens.schema.json, add dev-dependency jsonschema, and validate serialized samples against it. sessionUid = `${sourceId}:${nativeId}`, unattributed key `unattributed`, sourceId forms `claude-local`, `codex-local`, `wsl:<distro>:claude|codex`. Risk (medium): serde representations of the oneOf unions (In, Ev, Msg) must match the schema exactly, and the v3/v5 type coexistence could cause name clashes; the schema tests catch the former.",
+      "design_refs": [
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）",
+        "8. IPC と実装",
+        "1. 原則と構成"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/model.rs",
+          "kind": "modify",
+          "note": "add section 7 types; keep v3 Snapshot types"
+        },
+        {
+          "path": "crates/lens-core/schema/lens.schema.json",
+          "kind": "add",
+          "note": "verbatim copy of the section 7 JSON block"
+        },
+        {
+          "path": "crates/lens-core/tests/schema.rs",
+          "kind": "add",
+          "note": "conformance tests"
+        },
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "dev-dependency jsonschema"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test schema schema_file_equals_design_block` exit 0: JSON parsed from the ```json block of docs/architecture-v5.md section 7 equals schema/lens.schema.json, and `definitions` has exactly the 16 keys ts, N, Agent, Src, Conf, Diag, Origin, ProjectActivity, UnifiedSession, SourceHealth, Settings, IpcError, In, Detail, Ev, Msg.",
+        "`cargo test -p lens-core --test schema samples_validate_all_types` exit 0: serialized samples of ProjectActivity, UnifiedSession, SourceHealth, Settings, IpcError, Detail, the 3 Ev variants and the 6 Msg variants validate against the matching definition.",
+        "`cargo test -p lens-core --test schema invalid_hello_missing_home_rejected` exit 0: hello Msg without `home` fails validation.",
+        "`cargo test -p lens-core --test schema enum_sizes_source_health_and_ipc_error` exit 0: SourceHealth.state has exactly 10 values (ok, not_installed, empty, access_denied, unsupported_schema, error, distro_stopped, helper_unavailable, helper_version_mismatch, unsupported); IpcError.code has exactly 7 (not_ready, invalid_argument, project_not_found, distro_not_found, source_not_found, path_invalid, settings_save_failed).",
+        "`cargo test -p lens-core --test schema msg_unknown_fields_ignored` exit 0: `{\"type\":\"heartbeat\",\"now\":\"2026-01-01T00:00:00Z\",\"extra\":1}` deserializes to Msg::Heartbeat without error. Second command: `cargo test -p lens-core --test schema session_uid_and_source_id_forms` exit 0: sessionUid(`claude-local`,`s1`) == `claude-local:s1`; wsl source id `wsl:Ubuntu:codex`; unattributed project key == `unattributed`.",
+        "Stop state: v5 types and JSON Schema exist next to the untouched v3 types; the engine does not produce them yet. Not usable yet, observable as `rg -n \"fn (f27_persist_exact_json|f13a_protocol_mismatch_stops|version1_distro_is_unsupported_and_not_started|f2_child_idle_after_parent_end_turn|first_line_is_hello_protocol_1)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting every later task that lists it in depends_on; no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test schema -- --list 2>/dev/null | rg -c '^(schema_file_equals_design_block|samples_validate_all_types|invalid_hello_missing_home_rejected|enum_sizes_source_health_and_ipc_error|msg_unknown_fields_ignored|session_uid_and_source_id_forms): test$')\" = 6",
+          "expect_exit_code": 0,
+          "note": "Asserts all 6 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test schema",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f27_persist_exact_json|f13a_protocol_mismatch_stops|version1_distro_is_unsupported_and_not_started|f2_child_idle_after_parent_end_turn|first_line_is_hello_protocol_1)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T007",
+      "title": "Project Resolver: keys, display, git root, WSL path conversion",
+      "intent": "Rewrite project.rs: decode file:// URIs; keep the comparison key separate from the display string; Windows key = uppercase drive letter, `\\` separators, no trailing separator, THEN whole-string lowercase (so `C:\\Work\\Repo` -> `c:\\work\\repo`); Linux key keeps case and `/mnt/<drive>/...` maps to the Windows key; search `.git` upward up to RESOLVE_MAX_DEPTH (32) levels without starting git, cached -> attribution git_root, else raw_path; Windows-side `\\\\wsl.localhost\\<distro>\\...` and `\\\\wsl$\\<distro>\\...` convert by string to `wsl:<distro>:/path`; WSL display `p (WSL: <distro>)`; cwd absent => projects=[] (row key `unattributed`). Risk (medium): the exact depth boundary (32 found, 33 not) and URI decoding of unusual characters are the uncertain parts; both have explicit cases.",
+      "design_refs": [
+        "8. IPC と実装",
+        "6. WSL ヘルパー",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/project.rs",
+          "kind": "modify",
+          "note": "key/display split, depth limit, WSL conversions"
+        },
+        {
+          "path": "crates/lens-core/tests/project.rs",
+          "kind": "add",
+          "note": "F18, F23a, F23b and depth tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test project f18_windows_key_case_insensitive` exit 0: F18: `C:\\Work\\Repo`, `c:\\work\\repo` and `C:\\Work\\Repo\\` all give key `c:\\work\\repo`; display keeps `C:\\Work\\Repo`. Second command: `cargo test -p lens-core --test project f23a_mnt_drive_maps_to_windows_key` exit 0: F23a: WSL cwd `/mnt/c/x` and Windows cwd `C:\\x` give the same key `c:\\x` (one row).",
+        "`cargo test -p lens-core --test project f23b_wsl_localhost_converts_to_wsl_key` exit 0: F23b: `\\\\wsl.localhost\\Ubuntu\\home\\u\\p`, `\\\\wsl$\\Ubuntu\\home\\u\\p` and WSL cwd `/home/u/p` all give `wsl:Ubuntu:/home/u/p` (case preserved), display `p (WSL: Ubuntu)`.",
+        "`cargo test -p lens-core --test project git_root_depth_32_found_33_not` exit 0: `.git` 32 levels above cwd -> attribution git_root; 33 levels above -> raw_path. Second command: `cargo test -p lens-core --test project file_uri_decoded` exit 0: `file:///C:/Work/My%20Repo` -> key `c:\\work\\my repo`, display `C:\\Work\\My Repo`.",
+        "`cargo test -p lens-core --test project cwd_missing_means_unattributed` exit 0: no cwd in the log -> projects == [] and row key `unattributed`; raw body text containing a path is never used.",
+        "`rg -n \"Command|std::process\" crates/lens-core/src/project.rs` exits 1 (git is never started).",
+        "Stop state: resolver replaced behind its call sites; v3 grouping now follows v5 keys. Not usable yet, observable as `rg -n \"fn (f2_child_idle_after_parent_end_turn)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T023); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test project -- --list 2>/dev/null | rg -c '^(f18_windows_key_case_insensitive|f23a_mnt_drive_maps_to_windows_key|f23b_wsl_localhost_converts_to_wsl_key|git_root_depth_32_found_33_not|file_uri_decoded|cwd_missing_means_unattributed): test$')\" = 6",
+          "expect_exit_code": 0,
+          "note": "Asserts all 6 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test project",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"Command|std::process\" crates/lens-core/src/project.rs",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f2_child_idle_after_parent_end_turn)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T008",
+      "title": "WSL helper crate: CLI parsing and exit codes",
+      "intent": "Create workspace member crates/lens-wsl-helper (binary lens-wsl-helper, depends on lens-core for constants): `--version` prints one line and exits 0; `serve --protocol <int> [--roots <abs-path>...]` validated by `cli::run(args, out, err) -> i32` (thin main): unknown argument, missing subcommand, missing or non-integer --protocol, or relative --roots => exit 2, stderr `usage_error`; --protocol != PROTOCOL_VERSION => exit 3, `protocol_unsupported`; every root unreadable => exit 4, `root_unreadable`; stdout write failure => exit 5, `stdout_failed`; stderr carries only code names and versions. Done early to pin the helper contract. Risk (medium): the helper is a Linux binary developed on a Windows host, so tests run the host build and exercise exit 5 through a failing Write injected into cli::run rather than a closed fd; real Linux behaviour is not covered by this task.",
+      "design_refs": [
+        "6.2 ヘルパー CLI",
+        "6.3 診断コードと NDJSON 受信",
+        "10. プライバシー"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "Cargo.toml",
+          "kind": "modify",
+          "note": "workspace member crates/lens-wsl-helper"
+        },
+        {
+          "path": "crates/lens-wsl-helper/Cargo.toml",
+          "kind": "add",
+          "note": "binary crate, feature fault_inject declared (used by the serve task)"
+        },
+        {
+          "path": "crates/lens-wsl-helper/src/main.rs",
+          "kind": "add",
+          "note": "thin main calling cli::run"
+        },
+        {
+          "path": "crates/lens-wsl-helper/src/cli.rs",
+          "kind": "add",
+          "note": "argument parsing, exit codes"
+        },
+        {
+          "path": "crates/lens-wsl-helper/tests/cli.rs",
+          "kind": "add",
+          "note": "F29a-F29d and --version"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-wsl-helper --test cli f29a_usage_errors_exit_2` exit 0: F29a: `serve` (no --protocol), `serve --protocol x`, `serve --protocol 1 --roots rel`, `bogus`, and no subcommand each -> exit 2 and stderr exactly `usage_error`.",
+        "`cargo test -p lens-wsl-helper --test cli f29b_protocol_mismatch_exit_3` exit 0: F29b: `serve --protocol 2` -> exit 3, stderr `protocol_unsupported`.",
+        "`cargo test -p lens-wsl-helper --test cli f29c_all_roots_unreadable_exit_4` exit 0: F29c: `serve --protocol 1 --roots /no/such` -> exit 4, stderr `root_unreadable`.",
+        "`cargo test -p lens-wsl-helper --test cli f29d_stdout_failure_exit_5` exit 0: F29d: cli::run with a Write that always errors -> returns 5, stderr `stdout_failed`.",
+        "`cargo test -p lens-wsl-helper --test cli version_prints_one_line` exit 0: `--version` -> exactly 1 stdout line, exit 0.",
+        "Stop state: lens-wsl-helper crate exposes the CLI contract and exit codes; `serve` is a stub returning 0 after argument checks. Not usable yet, observable as `rg -n \"fn (first_line_is_hello_protocol_1|f11a_heartbeat_silence_29_vs_30)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit; removes the workspace member lens-wsl-helper again; revert serve and the supervisor tasks first; the helper writes no files. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-wsl-helper --test cli -- --list 2>/dev/null | rg -c '^(f29a_usage_errors_exit_2|f29b_protocol_mismatch_exit_3|f29c_all_roots_unreadable_exit_4|f29d_stdout_failure_exit_5|version_prints_one_line): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-wsl-helper --test cli",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (first_line_is_hello_protocol_1|f11a_heartbeat_silence_29_vs_30)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T009",
+      "title": "Clock offset correction",
+      "intent": "Add clock_offset.rs: offset_ms = recv_ms - helper_now_ms sampled at hello and at each heartbeat; use the median of the last HB_MEDIAN_N (5) samples; |offset_ms| <= CLOCK_SKEW_MS (5000) means no correction; otherwise t_corrected_ms = t_helper_ms + offset_ms and diagnostic clock_skew; afterwards, if t_corrected_ms > now_ms, round down to now_ms (+ clock_skew); order is correct then clamp with no tolerance. Risk (low): pure arithmetic with the design's worked numbers; the only subtlety is the strict inequality at +/-5000.",
+      "design_refs": [
+        "3.2 clockOffset 補正",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/clock_offset.rs",
+          "kind": "add",
+          "note": "median window, correction, clamp"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod clock_offset"
+        },
+        {
+          "path": "crates/lens-core/tests/clock_offset.rs",
+          "kind": "add",
+          "note": "F10a/F10b and worked example"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test clock_offset f10a_threshold_cases` exit 0: F10a: offset_ms 4999 / 5000 / 5001 / -5001 -> corrected? no / no / yes / yes, with clock_skew only for the yes cases.",
+        "`cargo test -p lens-core --test clock_offset worked_example_section_3_2` exit 0: helper now 12:00:00.000, received 12:00:08.000 -> offset_ms 8000; lastActivityAt 11:59:50.000 becomes 11:59:58.000 and minus 8000 ms restores 11:59:50.000.",
+        "`cargo test -p lens-core --test clock_offset median_of_last_five` exit 0: samples [7000,8000,8000,9000,40000] -> 8000; [8000,8000,8000,40000,40000] -> 8000 (two outliers tolerated); a 6th sample evicts the oldest.",
+        "`cargo test -p lens-core --test clock_offset f10b_future_time_clamped_to_now` exit 0: F10b: t_corrected = now_ms + 1000 -> lastActivityAt == now_ms and diagnostic clock_skew.",
+        "Stop state: pure clock-offset module with tests, no caller. Not usable yet, observable as `rg -n \"fn (f13a_protocol_mismatch_stops|f2_child_idle_after_parent_end_turn|f11a_heartbeat_silence_29_vs_30)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T015, T023, T027); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test clock_offset -- --list 2>/dev/null | rg -c '^(f10a_threshold_cases|worked_example_section_3_2|median_of_last_five|f10b_future_time_clamped_to_now): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test clock_offset",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f13a_protocol_mismatch_stops|f2_child_idle_after_parent_end_turn|f11a_heartbeat_silence_29_vs_30)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 1
+    },
+    {
+      "id": "T010",
+      "title": "Redaction rules R1-R4 and truncation (single sanitize entry)",
+      "intent": "Rewrite redact.rs to the fixed rules, replacing the matched part with [REDACTED]: R1 `\\bsk-[A-Za-z0-9_-]{SK_MIN,}`, R2 `\\bgh[pousr]_[A-Za-z0-9]{GH_LEN}` (36), R3 `\\bAKIA[0-9A-Z]{AWS_LEN}\\b` (16), R4 `(?i)\\b[A-Z0-9_]*(R4_WORDS)[A-Z0-9_]*\\s*[=:]\\s*\\S+` with only the value replaced. Truncation: utterance/tool input keep the first TRUNC_TEXT_CHARS (2000) chars; tool output keeps the first and last TRUNC_OUT_CHARS (1000) chars with nothing inserted between them. Expose one `pub fn sanitize` used by the Aggregator, IPC and NDJSON receiver (double redaction). Fixtures are synthetic strings built in the tests. Risk (low): pure functions; the only uncertainty is regex edge cases, pinned by the boundary lengths below.",
+      "design_refs": [
+        "10. プライバシー",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T003"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/redact.rs",
+          "kind": "modify",
+          "note": "R1-R4, truncate_text, truncate_output, pub fn sanitize"
+        },
+        {
+          "path": "crates/lens-core/tests/redact.rs",
+          "kind": "add",
+          "note": "F16a-d and F30 boundary tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test redact f16a_sk_key` exit 0: F16a: `sk-` + 24 x 'a' -> `[REDACTED]`; `sk-` + 19 x 'a' -> unchanged. Second command: `cargo test -p lens-core --test redact f16b_github_token` exit 0: F16b: `ghp_` + 36 alphanumerics -> `[REDACTED]`; `ghp_` + 35 -> unchanged.",
+        "`cargo test -p lens-core --test redact f16c_aws_key_id` exit 0: F16c: `AKIA` + 16 [0-9A-Z] -> `[REDACTED]`; `AKIA` + 15 -> unchanged.",
+        "`cargo test -p lens-core --test redact f16d_named_secret_assignment` exit 0: F16d: `ANTIGRAVITY_CSRF_TOKEN=abc` -> `ANTIGRAVITY_CSRF_TOKEN=[REDACTED]`; `TOKEN_COUNT=5` -> `TOKEN_COUNT=[REDACTED]`.",
+        "`cargo test -p lens-core --test redact f30_truncate_text_2000` exit 0: F30: 2000-char utterance unchanged; 2001 chars -> first 2000 chars. Second command: `cargo test -p lens-core --test redact f30_truncate_output_1000_head_tail` exit 0: F30: 2000-char tool output unchanged; 2001 chars -> first 1000 + last 1000 chars (length 2000, no separator).",
+        "`rg -c \"pub fn sanitize\" crates/lens-core/src/redact.rs` prints 1 and exits 0 (single entry point).",
+        "Stop state: redact module final (single sanitize entry), no caller in the engine yet. Not usable yet, observable as `rg -n \"fn (f13a_protocol_mismatch_stops|f2_child_idle_after_parent_end_turn|first_line_is_hello_protocol_1|f31_leaked_token_redacted_before_ipc)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T015, T023, T024, T030); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test redact -- --list 2>/dev/null | rg -c '^(f16a_sk_key|f16b_github_token|f16c_aws_key_id|f16d_named_secret_assignment|f30_truncate_text_2000|f30_truncate_output_1000_head_tail): test$')\" = 6",
+          "expect_exit_code": 0,
+          "note": "Asserts all 6 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test redact",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -c \"pub fn sanitize\" crates/lens-core/src/redact.rs",
+          "expect_exit_code": 0,
+          "note": "Exactly one entry; exits 0 when found."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f13a_protocol_mismatch_stops|f2_child_idle_after_parent_end_turn|first_line_is_hello_protocol_1|f31_leaked_token_redacted_before_ipc)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T011",
+      "title": "Child process spawn wrapper: Stdio::null and Job Object",
+      "intent": "Add process.rs: the single spawn helper, always `.stdin(Stdio::null())`, stdout piped, stderr captured as diagnostic codes only. On Windows (cfg(windows), windows-sys feature Win32_System_JobObjects) the child is assigned to a Job Object with KILL_ON_JOB_CLOSE so that Lens exit stops helpers; on other targets the Job Object step is a compiled-in no-op. The F9 test re-executes the test binary as the child (env LENS_TEST_CHILD=stdin_reader): it reads stdin to EOF, prints `ready`, then its byte count. Risk (high): Job Object semantics exist only on Windows and the F9 'does not hang' property is timing-sensitive; the test therefore uses a watchdog driven by the fake Clock (+10 s kills the child and fails) instead of real sleeps, and the Job Object assertion is a cfg(windows) test run on this Windows host, while the non-Windows no-op path has its own cfg(not(windows)) test.",
+      "design_refs": [
+        "9. UI と安全",
+        "6. WSL ヘルパー",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T004"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/process.rs",
+          "kind": "add",
+          "note": "spawn helper, Job Object (cfg windows), no-op elsewhere"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod process"
+        },
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "windows-sys (cfg(windows) dependency, Win32_System_JobObjects)"
+        },
+        {
+          "path": "crates/lens-core/tests/child_stdin.rs",
+          "kind": "add",
+          "note": "F9 and Job Object tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test child_stdin f9_child_stdin_null_exits_zero_read_zero` exit 0: F9: child started under a parent pipe that stays open and is never written to: after `ready` and FakeClock +10 s the child has exited with code 0 and reported 0 bytes read; if still running at +10 s the test fails.",
+        "`cargo test -p lens-core --test child_stdin job_object_contains_child_windows` exit 0: #[cfg(windows)]: IsProcessInJob(child, job) == TRUE for the spawned child, and closing the job handle terminates it.",
+        "`cargo test -p lens-core --test child_stdin spawn_without_job_on_non_windows` exit 0: #[cfg(not(windows))]: the spawn helper succeeds and reports job == None.",
+        "`rg -n \"Command::new\" crates src-tauri/src --glob '*.rs' --glob '!process.rs' --glob '!**/tests/**'` exits 1 (Command::new appears only in process.rs outside tests, in crates/ and in src-tauri/src).",
+        "`rg -n \"stdin\\(Stdio::null\\(\\)\\)\" crates/lens-core/src/process.rs` exits 0.",
+        "Stop state: spawn wrapper with Stdio::null and Job Object (Windows) is tested; no production caller. Not usable yet, observable as `rg -n \"fn (version1_distro_is_unsupported_and_not_started|f11a_heartbeat_silence_29_vs_30)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T017, T027); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test child_stdin -- --list 2>/dev/null | rg -c '^(f9_child_stdin_null_exits_zero_read_zero|job_object_contains_child_windows|spawn_without_job_on_non_windows): test$')\" = 3",
+          "expect_exit_code": 0,
+          "note": "Asserts all 3 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test child_stdin",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"Command::new\" crates src-tauri/src --glob '*.rs' --glob '!process.rs' --glob '!**/tests/**'",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "rg -n \"stdin\\(Stdio::null\\(\\)\\)\" crates/lens-core/src/process.rs",
+          "expect_exit_code": 0,
+          "note": "Present; exits 0."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (version1_distro_is_unsupported_and_not_started|f11a_heartbeat_silence_29_vs_30)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T012",
+      "title": "Claude Code parsing 1/2: type-only probe, uid/path rules, mixed sessions",
+      "intent": "Align claude.rs with section 5, first half: probe only `type` first so api-request-blob lines are never fully parsed (a line without a readable type is fully parsed only when <= MAX_LINE_BYTES); paths projects/<enc>/<sid>.jsonl and <sid>/subagents/agent-<aid>.jsonl, child id `<sid>::agent:<aid>` sharing the parent sessionId; a file with two sessionIds is excluded with mixed_session_ids. Fixtures are generated in the tests with synthetic values (the 3 MiB blob is built in memory); `smoke --real-logs` is an optional manual check, not a gate. Risk (high): real Claude logs are the least-specified input (shapes drift, blobs are huge); the tests pin only the shapes the design names. Title, activity and turn rules follow in T018.",
+      "design_refs": [
+        "5. エージェント別仕様",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）"
+      ],
+      "depends_on": [
+        "T005"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/claude.rs",
+          "kind": "modify",
+          "note": "type-only probe, uid/path rules, mixed-session exclusion"
+        },
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "route Claude files through the probe and expose a full-parse counter for tests"
+        },
+        {
+          "path": "crates/lens-core/tests/claude_parse.rs",
+          "kind": "add",
+          "note": "hermetic fixtures, synthetic values"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test claude_parse f3_api_request_blob_not_fully_parsed` exit 0: F3: 3 MiB api-request-blob (timestamp T+1000) between two normal lines -> blob full-parse counter == 0 and lastActivityAt == timestamp of the last normal line.",
+        "`cargo test -p lens-core --test claude_parse typeless_line_parsed_only_up_to_max_line_bytes` exit 0: a line without `type` of 4194304 B is fully parsed (counter == 1); of 4194305 B it is dropped with oversized_line.",
+        "`cargo test -p lens-core --test claude_parse mixed_session_ids_excluded` exit 0: file whose records carry sessionId `a` and `b` -> session excluded, diagnostic mixed_session_ids == 1, completeness partial.",
+        "`cargo test -p lens-core --test claude_parse subagent_uid_and_shared_session_id` exit 0: subagents/agent-x1.jsonl under session s1 -> sessionUid `claude-local:s1::agent:x1`, nativeId `s1::agent:x1`, parent sessionId s1, hierarchy.kind subagent.",
+        "Stop state: Claude type-only probe, uid/path and mixed-session rules in place; title, activity and turn rules still v3. Not usable yet, observable as `rg -n \"fn (title_fallback_order)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T018); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test claude_parse -- --list 2>/dev/null | rg -c '^(f3_api_request_blob_not_fully_parsed|typeless_line_parsed_only_up_to_max_line_bytes|mixed_session_ids_excluded|subagent_uid_and_shared_session_id): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test claude_parse",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (title_fallback_order)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T013",
+      "title": "Codex rollout parsing 1/2: session_meta rules and fork boundary",
+      "intent": "Align codex.rs with section 5, first half: id and project come from the FIRST session_meta.payload.{id,cwd} only; lines with 0-based index < session_meta.subagent_history_start_ordinal are not activity; no ordinal with two session_meta => ingest all, diagnostic fork_boundary_unknown, confidence low; a file with only session_meta takes lastActivityAt from the file mtime. Synthetic rollouts only. Risk (high): fork timestamps are rewritten by Codex and the ordinal field is the only boundary; rollouts shaped differently from the design fixtures are unverified. Body, thread_source and title rules follow in T019.",
+      "design_refs": [
+        "5. エージェント別仕様",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "6.3 診断コードと NDJSON 受信"
+      ],
+      "depends_on": [
+        "T005"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/codex.rs",
+          "kind": "modify",
+          "note": "first session_meta wins, ordinal boundary, file-mtime fallback"
+        },
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "plumbing for the fork boundary"
+        },
+        {
+          "path": "crates/lens-core/tests/codex_parse.rs",
+          "kind": "add",
+          "note": "synthetic rollouts"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test codex_parse f1a_fork_ordinal_excludes_inherited` exit 0: F1a: lines 0-2 timestamp F, subagent_history_start_ordinal=3, line 3 timestamp F+5s -> lastActivityAt == F+5s.",
+        "`cargo test -p lens-core --test codex_parse f1b_fork_boundary_unknown` exit 0: F1b: no ordinal and two session_meta -> all lines ingested, diagnostic fork_boundary_unknown count == 1, status.confidence == low.",
+        "`cargo test -p lens-core --test codex_parse first_session_meta_wins` exit 0: rollout line 0 session_meta {id:`a`, cwd:`C:\\x`}, line 1 session_meta {id:`b`, cwd:`D:\\y`} -> sessionUid `codex-local:a` and project key `c:\\x` (the second record changes neither).",
+        "`cargo test -p lens-core --test codex_parse session_meta_only_file_no_activity` exit 0: file containing only session_meta, file mtime M -> lastActivityAt == M, lastActivitySource == file_mtime, no turn open.",
+        "Stop state: Codex session_meta and fork-boundary rules in place; body, thread_source and title rules still v3. Not usable yet, observable as `rg -n \"fn (f17_response_item_only_body)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T019); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test codex_parse -- --list 2>/dev/null | rg -c '^(f1a_fork_ordinal_excludes_inherited|f1b_fork_boundary_unknown|first_session_meta_wins|session_meta_only_file_no_activity): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test codex_parse",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f17_response_item_only_body)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T014",
+      "title": "Reader hardening 2/2: file replacement, Windows share mode, read-only open",
+      "intent": "Finish the section 8 Reader spec in reader.rs: state (fileId, offset, size, mtime) with fileId from the existing file-id crate; fileId change or size shrink => file_replaced and reread from the head, while a small append is not a replacement; Windows share mode READ|WRITE|DELETE (share_mode(7)); read-only open only. Risk (high): share-mode and fileId behaviour are Windows-specific and cannot run on Linux CI, so the share-mode test is cfg(windows) and the other tests use portable file operations only.",
+      "design_refs": [
+        "8. IPC と実装",
+        "3.3 数値の往復検算",
+        "6.3 診断コードと NDJSON 受信",
+        "1. 原則と構成"
+      ],
+      "depends_on": [
+        "T005"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/reader.rs",
+          "kind": "modify",
+          "note": "file replacement detection, share mode, read-only open"
+        },
+        {
+          "path": "crates/lens-core/tests/reader.rs",
+          "kind": "modify",
+          "note": "F7 and share-mode tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test reader f7_file_replaced_on_fileid_change_or_shrink` exit 0: F7: fileId change (file swapped) and size shrink 3072 -> 1000 each give file_replaced == 1 and reread from offset 0.",
+        "`cargo test -p lens-core --test reader f7_small_append_no_reread` exit 0: F7: 3072 B file + 100 B append -> file_replaced == 0, only the 100 B are read.",
+        "`cargo test -p lens-core --test reader windows_share_mode_allows_concurrent_writer` exit 0: #[cfg(windows)]: reading succeeds while another handle holds the file open for write+delete; skipped (not compiled) on other targets.",
+        "`rg -n \"\\.(write|append|create|create_new|truncate)\\(true\\)|File::create|fs::write\" crates/lens-core/src/reader.rs` exits 1 (no write-capable open in the reader), and `rg -n \"share_mode\\(\" crates/lens-core/src/reader.rs` exits 0 (Windows share mode is set).",
+        "Stop state: reader complete: file replacement, share mode, read-only open; parsers and status are still v3. Not usable yet, observable as `rg -n \"fn (f21_seven_day_boundary)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T022); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test reader -- --list 2>/dev/null | rg -c '^(f7_file_replaced_on_fileid_change_or_shrink|f7_small_append_no_reread|windows_share_mode_allows_concurrent_writer): test$')\" = 3",
+          "expect_exit_code": 0,
+          "note": "Asserts all 3 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test reader",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"\\.(write|append|create|create_new|truncate)\\(true\\)|File::create|fs::write\" crates/lens-core/src/reader.rs",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "rg -n \"share_mode\\(\" crates/lens-core/src/reader.rs",
+          "expect_exit_code": 0,
+          "note": "Share mode present (cfg(windows) block)."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f21_seven_day_boundary)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T015",
+      "title": "NDJSON receiver 1/2: hello, protocol, shape and order checks",
+      "intent": "Add ndjson.rs, first half: Msg validation and a state machine (hello must be first; session_upsert / source_health before hello are rejected), unknown `type` ignored, unknown fields ignored, hello.protocol != PROTOCOL_VERSION => stop with helper_version_mismatch and restart_allowed=false, per-code diagnostic counts. Risk (medium): the boundary between 'invalid_message' (bad shape) and 'malformed_record' (not JSON) depends on the order of checks; the F13 cases fix that order. Line-level limits and redaction follow in T020.",
+      "design_refs": [
+        "6.3 診断コードと NDJSON 受信",
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T005",
+        "T006",
+        "T009",
+        "T010"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/ndjson.rs",
+          "kind": "add",
+          "note": "Msg validation, state machine, diagnostics"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod ndjson"
+        },
+        {
+          "path": "crates/lens-core/tests/ndjson.rs",
+          "kind": "add",
+          "note": "F13a-F13c, F13f"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test ndjson f13a_protocol_mismatch_stops` exit 0: F13a: hello with protocol=2 -> diagnostic helper_version_mismatch, receiver stopped, restart_allowed == false.",
+        "`cargo test -p lens-core --test ndjson f13b_missing_required_field` exit 0: F13b: `{\"type\":\"heartbeat\"}` (no now) -> invalid_message == 1.",
+        "`cargo test -p lens-core --test ndjson f13c_unknown_type_ignored` exit 0: F13c: `{\"type\":\"foo\"}` -> unknown_message == 1, nothing else changes.",
+        "`cargo test -p lens-core --test ndjson f13f_upsert_before_hello` exit 0: F13f: first line session_upsert (and, separately, source_health) -> invalid_message == 1 and 0 sessions stored.",
+        "Stop state: receiver validates hello, protocol, shape and order; line limits and double redaction are missing. Not usable yet, observable as `rg -n \"fn (f13d_oversized_line)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T020); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test ndjson -- --list 2>/dev/null | rg -c '^(f13a_protocol_mismatch_stops|f13b_missing_required_field|f13c_unknown_type_ignored|f13f_upsert_before_hello): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test ndjson",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f13d_oversized_line)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T016",
+      "title": "settings.json persistence",
+      "intent": "Add settings.rs: SETTINGS_PATH (%APPDATA%\\agent-session-lens\\settings.json; the directory is injectable for tests) with a `SettingsFs` trait (real + fault-injecting fake). Missing file => defaults and the file is created only at the first save. Invalid JSON, schema mismatch or version != 1 => defaults, the broken file is moved to settings.json.bad, diagnostic settings_load_failed. helperPath not starting with `/` => that item ignored, HELPER_PATH used, settings_load_failed. Save = write a temp file in the same directory then rename; on any failure the in-memory settings stay unchanged and the error is settings_save_failed. set_distro_enabled writes disabledDistros, set_source_root writes sourceRoots (null removes the entry). Risk (medium): F26 asks for a read-only directory, but on Windows the read-only attribute does not stop file creation in a directory, so the portable test injects the failure through SettingsFs and only a cfg(unix) variant uses chmod 0555.",
+      "design_refs": [
+        "6.1 設定（settings.json）",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T006"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/settings.rs",
+          "kind": "add",
+          "note": "load/save, SettingsFs trait, .bad quarantine"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod settings"
+        },
+        {
+          "path": "crates/lens-core/tests/settings.rs",
+          "kind": "add",
+          "note": "F26-F28 tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test settings f27_persist_exact_json` exit 0: F27: set_distro_enabled(Ubuntu,false) + set_source_root(claude-local, `C:\\x`) -> file content exactly {\"version\":1,\"disabledDistros\":[\"Ubuntu\"],\"sourceRoots\":{\"claude-local\":\"C:\\\\x\"}}; a re-created Settings loaded from it is equal. Second command: `cargo test -p lens-core --test settings f27_null_path_removes_entry` exit 0: F27: set_source_root(claude-local, null) -> sourceRoots no longer contains claude-local.",
+        "`cargo test -p lens-core --test settings f28_invalid_json_defaults_and_bad_file` exit 0: F28: file content `{not json` -> defaults, settings.json.bad exists, diagnostic settings_load_failed == 1; version 2 behaves the same.",
+        "`cargo test -p lens-core --test settings f28_relative_helper_path_ignored` exit 0: F28: helperPath `usr/bin/x` -> effective helper path == HELPER_PATH (/usr/local/bin/lens-wsl-helper) and settings_load_failed == 1.",
+        "`cargo test -p lens-core --test settings f26_save_failure_leaves_memory_unchanged` exit 0: F26: SettingsFs whose rename fails: set_distro_enabled(Ubuntu,false) returns settings_save_failed and disabledDistros stays empty (cfg(unix) twin uses a 0555 directory).",
+        "`cargo test -p lens-core --test settings missing_file_defaults_no_create` exit 0: no file -> defaults, directory listing still empty after load; first save creates exactly settings.json.",
+        "Stop state: settings store with SettingsFs and tests exists; no consumer. Not usable yet, observable as `rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f23_unc_wsl_localhost_path_invalid)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit; persisted state: the only file this plan ever writes is %APPDATA%\\agent-session-lens\\settings.json (plus settings.json.bad on corrupt input); this task's tests use a temp directory, so no real file exists yet and revert needs no cleanup. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test settings -- --list 2>/dev/null | rg -c '^(f27_persist_exact_json|f27_null_path_removes_entry|f28_invalid_json_defaults_and_bad_file|f28_relative_helper_path_ignored|f26_save_failure_leaves_memory_unchanged|missing_file_defaults_no_create): test$')\" = 6",
+          "expect_exit_code": 0,
+          "note": "Asserts all 6 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test settings",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f23_unc_wsl_localhost_path_invalid)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T017",
+      "title": "WSL distro discovery and running-state polling",
+      "intent": "Add distro.rs: read HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{GUID} DistributionName/Version without waking WSL, behind a `LxssRegistry` trait (real impl cfg(windows); non-Windows impl returns an empty list); only Version=2 is monitored, other versions become SourceHealth state `unsupported` and are never started; the running check runs `wsl.exe --list --running --quiet` every DISTRO_POLL_SECS (60) through process.rs behind a `RunningProbe` trait and decodes UTF-16LE output; stopped distros are never started and distros in disabledDistros are not checked. The disabled-distro list is a plain `&[String]` parameter (the Settings type comes from the schema task), so this task does not depend on settings.rs. Risk (high, platform uncertainty): the real registry read and the real wsl.exe output encoding are Windows-only and cannot run in CI; tests use fakes and a byte fixture of the UTF-16LE format, so a real-machine difference (BOM, CRLF, localized text) is unverified; an optional manual check is `reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss /s`.",
+      "design_refs": [
+        "6. WSL ヘルパー",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T006",
+        "T011"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/distro.rs",
+          "kind": "add",
+          "note": "LxssRegistry/RunningProbe traits, UTF-16LE decode, poll schedule"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod distro"
+        },
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "cfg(windows) registry dependency (winreg or windows-sys Win32_System_Registry)"
+        },
+        {
+          "path": "crates/lens-core/tests/distro.rs",
+          "kind": "add",
+          "note": "fake-based tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test distro version1_distro_is_unsupported_and_not_started` exit 0: fake registry with Ubuntu Version=1 -> SourceHealth.state == unsupported and launch count == 0.",
+        "`cargo test -p lens-core --test distro utf16le_running_list_decoded` exit 0: bytes of `Ubuntu\\r\\nDebian\\r\\n` encoded as UTF-16LE (with and without BOM) -> [\"Ubuntu\",\"Debian\"].",
+        "`cargo test -p lens-core --test distro poll_period_59_vs_60` exit 0: FakeClock +59 s -> 0 probes after the first; +60 s -> 1 probe.",
+        "`cargo test -p lens-core --test distro disabled_distro_never_probed` exit 0: Ubuntu in disabledDistros -> 0 running probes and 0 launches over 120 s of FakeClock.",
+        "`cargo test -p lens-core --test distro stopped_distro_not_started` exit 0: probe lists no running distro -> state distro_stopped and launch count == 0.",
+        "Stop state: discovery library with fakes; real registry and wsl.exe implementations compile on Windows only and are not exercised by tests. Not usable yet, observable as `rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f23_unc_wsl_localhost_path_invalid)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T027, T031); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test distro -- --list 2>/dev/null | rg -c '^(version1_distro_is_unsupported_and_not_started|utf16le_running_list_decoded|poll_period_59_vs_60|disabled_distro_never_probed|stopped_distro_not_started): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test distro",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f23_unc_wsl_localhost_path_invalid)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T018",
+      "title": "Claude Code parsing 2/2: title order, activity set, turn signals",
+      "intent": "Align claude.rs with the section 4 activity list, second half: human message = type=user, no isMeta, no tool_result; title order custom-title, ai-title, first human message; activity events = human, assistant, tool_result, system/api_error only; turn signals = human start, end_turn, text starting `[Request interrupted by user`, system/api_error. Hermetic synthetic fixtures. Risk (medium): the rules are explicit in the design; the residual risk is a record shape outside the fixtures.",
+      "design_refs": [
+        "5. エージェント別仕様",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）"
+      ],
+      "depends_on": [
+        "T012"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/claude.rs",
+          "kind": "modify",
+          "note": "title order, activity set, turn signals"
+        },
+        {
+          "path": "crates/lens-core/tests/claude_parse.rs",
+          "kind": "modify",
+          "note": "title/activity/turn tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test claude_parse title_fallback_order` exit 0: file with custom-title `C`, ai-title `A` and human text `H` -> title C; without custom-title -> A; with neither -> H (isMeta and tool_result-only user records skipped).",
+        "`cargo test -p lens-core --test claude_parse activity_events_exclusions` exit 0: custom-title, ai-title, summary, attachment, isMeta and api-request-blob records do not move lastActivityAt; human, assistant, tool_result and system/api_error do.",
+        "`cargo test -p lens-core --test claude_parse turn_signals` exit 0: human record opens a turn; end_turn closes it (completed); text `[Request interrupted by user` closes it (aborted); system/api_error ends it as error.",
+        "`rg -n \"smoke|real-logs\" crates/lens-core/tests/claude_parse.rs` exits 1 (the gate test never touches real logs).",
+        "Stop state: Claude parsing complete; Codex, status table and aggregation are still v3. Not usable yet, observable as `rg -n \"fn (t31_rule3_open_turn_recent_write_window)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T021); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test claude_parse -- --list 2>/dev/null | rg -c '^(title_fallback_order|activity_events_exclusions|turn_signals): test$')\" = 3",
+          "expect_exit_code": 0,
+          "note": "Asserts all 3 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test claude_parse",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"smoke|real-logs\" crates/lens-core/tests/claude_parse.rs",
+          "expect_exit_code": 1,
+          "note": "Hermetic: rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (t31_rule3_open_turn_recent_write_window)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T019",
+      "title": "Codex rollout parsing 2/2: body source, thread_source, title and turn signals",
+      "intent": "Align codex.rs with section 5, second half: body text from response_item `message` only (event_msg is used for state only); thread_source user -> top_level, subagent -> subagent, guardian_review -> automated (not listed, not counted as activity, feeds the parent's autoReview input), unknown -> top_level + unknown_thread_source + completeness partial; title = thread_name from session_index.jsonl else first human message; turn signals task_started, task_complete (error present => error), turn_aborted. Risk (medium): values beyond the design's thread_source set are unknown by rule, so the residual risk is the response_item shape.",
+      "design_refs": [
+        "5. エージェント別仕様",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "6.3 診断コードと NDJSON 受信"
+      ],
+      "depends_on": [
+        "T013"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/codex.rs",
+          "kind": "modify",
+          "note": "response_item body, thread_source map, title, turn signals"
+        },
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "session_index.jsonl lookup and automated flag plumbing"
+        },
+        {
+          "path": "crates/lens-core/tests/codex_parse.rs",
+          "kind": "modify",
+          "note": "body/thread_source/title tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test codex_parse f17_response_item_only_body` exit 0: F17: same utterance as a response_item message and as an event_msg -> exactly 1 message in the body.",
+        "`cargo test -p lens-core --test codex_parse f24_unknown_thread_source` exit 0: F24: thread_source=\"foo\" -> hierarchy.kind == top_level, diagnostics contain {code: unknown_thread_source, count: 1}, health.completeness == partial.",
+        "`cargo test -p lens-core --test codex_parse f19_guardian_review_is_automated` exit 0: F19: thread_source=guardian_review with timestamps newer than the parent -> kind automated, excluded from the listing and from activity; parent autoReview input set (end-to-end F19 asserted in the aggregator task).",
+        "`cargo test -p lens-core --test codex_parse title_index_then_first_human` exit 0: session_index.jsonl line {\"id\":\"a\",\"thread_name\":\"N\"} -> title `N`; line absent and first human message `H` -> title `H`; event_msg task_started opens a turn, task_complete closes it (completed), task_complete carrying an error -> error, turn_aborted -> aborted.",
+        "Stop state: Codex parsing complete; status table and aggregation are still v3. Not usable yet, observable as `rg -n \"fn (t31_rule3_open_turn_recent_write_window)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T021); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test codex_parse -- --list 2>/dev/null | rg -c '^(f17_response_item_only_body|f24_unknown_thread_source|f19_guardian_review_is_automated|title_index_then_first_human): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test codex_parse",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (t31_rule3_open_turn_recent_write_window)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T020",
+      "title": "NDJSON receiver 2/2: line limits, malformed input and double redaction",
+      "intent": "Extend ndjson.rs, second half: line reader over the reader module's line splitter (<= MAX_LINE_BYTES, strict UTF-8, JSON parse => malformed_record) and sanitize() applied again to every incoming session (double redaction). Risk (medium): the check order (size, UTF-8, JSON, shape) must stay consistent with the first half.",
+      "design_refs": [
+        "6.3 診断コードと NDJSON 受信",
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T015"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/ndjson.rs",
+          "kind": "modify",
+          "note": "line reader, strict UTF-8, JSON parse, re-sanitize"
+        },
+        {
+          "path": "crates/lens-core/tests/ndjson.rs",
+          "kind": "modify",
+          "note": "F13d, F13e, invalid UTF-8, double redaction"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test ndjson f13d_oversized_line` exit 0: F13d: a 5 MiB (5242880 B) line -> oversized_line == 1 and the next valid line is processed.",
+        "`cargo test -p lens-core --test ndjson f13e_malformed_json` exit 0: F13e: `{\"type\":` -> malformed_record == 1.",
+        "`cargo test -p lens-core --test ndjson invalid_utf8_line` exit 0: line with byte 0x82 0xA0 -> invalid_utf8 == 1.",
+        "`cargo test -p lens-core --test ndjson incoming_session_redacted_again` exit 0: session_upsert whose currentTask text contains `ghp_` + 36 chars -> stored text contains `[REDACTED]` and no raw token.",
+        "Stop state: receiver library complete, not fed by any supervisor. Not usable yet, observable as `rg -n \"fn (f11a_heartbeat_silence_29_vs_30)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T027); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test ndjson -- --list 2>/dev/null | rg -c '^(f13d_oversized_line|f13e_malformed_json|invalid_utf8_line|incoming_session_redacted_again): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test ndjson",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f11a_heartbeat_silence_29_vs_30)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T021",
+      "title": "Status and stale decision table",
+      "intent": "Implement session.rs evaluate(now_ms, session) as the strictly ordered rule table 1..5 of section 3.1: age_s = floor((now_ms - t)/1000), fresh = age_s < STALE_SECS, stale = age_s >= STALE_SECS; rule 1 unknown/low for unreadable newest record (invalid_utf8 or oversized_line last line, no complete line within TAIL_SCAN_BYTES), rule 2 error (fresh: error high; stale: idle high), rule 3 open turn running (stale -> low; fresh and (tool_open or age_s < RECENT_WRITE_SECS) -> high; else low; stale flag = age_s >= STALE_SECS), rule 4 completed/aborted (fresh waiting_input, stale idle, high), rule 5 fallback (fresh running low, stale idle low); status.reason strings; updating = any session running with stale=false; low-only => updatingConfidence=low. Time is a parameter, so tests use no clock. The section 3.1 check table becomes the tests. Risk (medium): rule order is easy to get wrong at the 29/30 and 599/600 boundaries; the cases below pin each boundary value.",
+      "design_refs": [
+        "3. 判定規則と検算",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T018",
+        "T019"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/session.rs",
+          "kind": "modify",
+          "note": "evaluate() ordered rules, updating aggregation helper"
+        },
+        {
+          "path": "crates/lens-core/tests/status_table.rs",
+          "kind": "add",
+          "note": "section 3.1 table as tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test status_table t31_rule3_open_turn_recent_write_window` exit 0: open turn, no tool_open: age_s 29 -> (running, high, stale=false, updating=true); age_s 30 -> (running, low, stale=false, updating=true, updatingConfidence=low).",
+        "`cargo test -p lens-core --test status_table t31_rule3_tool_open_599_to_601` exit 0: open turn with tool_open: age_s 599 -> (running, high, false, updating=true); age_s 600 and 601 -> (running, low, stale=true, updating=false). Second command: `cargo test -p lens-core --test status_table t31_rule2_rule4_boundaries_599_600` exit 0: completed turn: 599 -> (waiting_input, high), 600 -> (idle, high); error-ended turn: 599 -> (error, high), 600 -> (idle, high); stale=false in all four.",
+        "`cargo test -p lens-core --test status_table f14_unresolved_tool_use_700_is_stale_running` exit 0: F14: unresolved tool_use, now_ms = T+700 -> running, stale=true, updating=false. Second command: `cargo test -p lens-core --test status_table f20_updating_599_600_601` exit 0: F20: open turn, now_ms = T+599 / T+600 / T+601 -> updating true / false / false.",
+        "`cargo test -p lens-core --test status_table t31_rule1_precedes_rule5` exit 0: last line invalid_utf8, last line oversized_line, and empty tail each -> (unknown, low, stale=false), even when an open turn precedes them (rule 1 before rule 5).",
+        "`cargo test -p lens-core --test status_table t31_rule5_no_turn_boundary` exit 0: complete lines without any turn boundary: age_s 100 -> (running, low, false); age_s 600 -> (idle, low, false).",
+        "Stop state: pure evaluate() decision function with tests; not wired to output. Not usable yet, observable as `rg -n \"fn (f21_seven_day_boundary|f2_child_idle_after_parent_end_turn)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T022, T023); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test status_table -- --list 2>/dev/null | rg -c '^(t31_rule3_open_turn_recent_write_window|t31_rule3_tool_open_599_to_601|t31_rule2_rule4_boundaries_599_600|f14_unresolved_tool_use_700_is_stale_running|f20_updating_599_600_601|t31_rule1_precedes_rule5|t31_rule5_no_turn_boundary): test$')\" = 7",
+          "expect_exit_code": 0,
+          "note": "Asserts all 7 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test status_table",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f21_seven_day_boundary|f2_child_idle_after_parent_end_turn)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T022",
+      "title": "Initial scan policy and engine wiring (Clock, Change Detector, status table)",
+      "intent": "Wire the engine to the Change Detector, Clock and evaluate(): the initial scan reads only files with mtime >= now_ms - INITIAL_SCAN_DAYS (7 d; exactly 7 d is read, older files only increment skippedOldFiles); the first read of a large file reads HEAD_SCAN_BYTES (524288, for the title) plus TAIL_SCAN_BYTES (8388608, for the latest state) and marks truncated_initial_scan / completeness partial; a tail with no complete line yields rule-1 unknown. Produce SourceHealth counters (filesTracked, sessionsTotal, partialSessions, skippedOldFiles, topDiagnostics) and states not_installed (root missing), empty, access_denied (unreadable), ok, error. Risk (high): this is where reader, detector and status first interact on real directory trees; head/tail stitching and the 7-day boundary (now_ms is injected, mtime set with filetime) are the uncertain parts, and access_denied for unreadable files cannot be created by chmod on Windows, so the test uses an exclusive-lock/ACL-denied fake file opener on Windows and chmod 000 on unix.",
+      "design_refs": [
+        "2. 既定値表（定数はここで 1 回だけ定義し、他の節は名前で参照する）",
+        "8. IPC と実装",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "1. 原則と構成"
+      ],
+      "depends_on": [
+        "T004",
+        "T014",
+        "T021"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "initial scan, head/tail read, SourceHealth counters, Clock + detector wiring"
+        },
+        {
+          "path": "crates/lens-core/src/reader.rs",
+          "kind": "modify",
+          "note": "head/tail window read API"
+        },
+        {
+          "path": "crates/lens-core/tests/initial_scan.rs",
+          "kind": "add",
+          "note": "F21 and source-state tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test initial_scan f21_seven_day_boundary` exit 0: F21: now_ms fixed; file with mtime == now_ms - 7*86400*1000 is read; mtime one second older is not read and skippedOldFiles == 1.",
+        "`cargo test -p lens-core --test initial_scan large_file_head_tail_truncated` exit 0: file of HEAD_SCAN_BYTES + TAIL_SCAN_BYTES + 1 B -> diagnostic truncated_initial_scan == 1 and completeness partial; title comes from the head, status from the tail.",
+        "`cargo test -p lens-core --test initial_scan tail_without_complete_line_is_unknown` exit 0: TAIL_SCAN_BYTES of a single unterminated line -> rule 1: (unknown, low, stale=false).",
+        "`cargo test -p lens-core --test initial_scan source_states_not_installed_empty_access_denied_ok` exit 0: missing root -> not_installed; empty root -> empty; unreadable root (injected opener denies) -> access_denied; root with one readable log -> ok with filesTracked == 1, sessionsTotal == 1.",
+        "`cargo test -p lens-core --test ingest` exits 0 (existing v3 behaviour tests unchanged).",
+        "Stop state: engine produces v5 status, scan policy and SourceHealth from fixtures; no outward API. Not usable yet, observable as `rg -n \"fn (f2_child_idle_after_parent_end_turn|f22_hash_and_mtime_unchanged_after_scan|first_line_is_hello_protocol_1)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T023, T025, T024); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test initial_scan -- --list 2>/dev/null | rg -c '^(f21_seven_day_boundary|large_file_head_tail_truncated|tail_without_complete_line_is_unknown|source_states_not_installed_empty_access_denied_ok): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test initial_scan",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f2_child_idle_after_parent_end_turn|f22_hash_and_mtime_unchanged_after_scan|first_line_is_hello_protocol_1)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T023",
+      "title": "Aggregator 1/2: session table, hierarchy, ordering, REEVAL",
+      "intent": "Implement aggregator.rs, first half: one table keyed by sessionUid; recompute only affected projects; re-evaluate everything every REEVAL_SECS (5) via the Clock; lastUpdatedAt = max lastActivityAt of attributed sessions (subagent/fork included), sorted descending, equal times by name ascending; unattributed row; automated sessions excluded from list and updating; a running guardian_review child sets the parent's autoReview=true without changing its value; when the parent turn ended after a child's last activity the child is idle/low with reason `parent turn ended after last activity`. Risk (high): it combines all earlier modules, and the stale-switch observation delay (F11c) depends on re-evaluation phase; the test sweeps all five phases. Sanitization, change events and F15 follow in T026.",
+      "design_refs": [
+        "8. IPC と実装",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "3.3 数値の往復検算",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T004",
+        "T006",
+        "T007",
+        "T009",
+        "T010",
+        "T021",
+        "T022"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/aggregator.rs",
+          "kind": "add",
+          "note": "table, recompute, REEVAL, ordering, hierarchy"
+        },
+        {
+          "path": "crates/lens-core/src/engine.rs",
+          "kind": "modify",
+          "note": "feed sessions into the aggregator"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod aggregator"
+        },
+        {
+          "path": "crates/lens-core/tests/aggregator.rs",
+          "kind": "add",
+          "note": "F2, F11c, F19, F25b"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test aggregator f2_child_idle_after_parent_end_turn` exit 0: F2: parent end_turn at T+100, child last tool_use at T+50, now_ms = T+110 -> parent {waiting_input, high, stale=false}, child {idle, low, stale=false, reason \"parent turn ended after last activity\"}, parent updating=false.",
+        "`cargo test -p lens-core --test aggregator f19_guardian_review_not_activity` exit 0: F19: guardian_review rollout newer than its parent -> parent lastUpdatedAt unchanged, parent autoReview == true, no row for the guardian.",
+        "`cargo test -p lens-core --test aggregator f25b_equal_time_name_ascending` exit 0: F25b: two projects `beta` and `alpha` with the same lastUpdatedAt -> order [alpha, beta].",
+        "`cargo test -p lens-core --test aggregator f11c_stale_observation_delay_all_phases` exit 0: FakeClock from age_s=599 stepping 1 s with re-evaluation every 5 s, for each of the 5 phase offsets -> first observed stale at age_s in 600..604 (delay 0..4), never 605 or later.",
+        "Stop state: session table, hierarchy, ordering and REEVAL logic; outgoing sanitization and change events missing. Not usable yet, observable as `rg -n \"fn (f15_own_repo_session_is_listed)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T026); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test aggregator -- --list 2>/dev/null | rg -c '^(f2_child_idle_after_parent_end_turn|f19_guardian_review_not_activity|f25b_equal_time_name_ascending|f11c_stale_observation_delay_all_phases): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test aggregator",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-core --test ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f15_own_repo_session_is_listed)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T024",
+      "title": "Helper serve loop: normalized NDJSON output",
+      "intent": "Implement `serve` in lens-wsl-helper: reuse the lens-core Engine on --roots (default $HOME/.claude/projects and $HOME/.codex/sessions), write hello first (protocol, helperVersion, distro, home, now), then source_health for every source, then session_upsert (all at start, diffs afterwards), session_remove when a log vanishes, heartbeat every HB_INTERVAL_SECS (10) from the Clock; send `error` code root_unreadable for a partly unreadable root and continue; truncation and redaction before sending; each line <= MAX_LINE_BYTES; with cargo feature fault_inject and env LENS_FAULT=panic a panic hook prints `internal` and the process exits 101 (the env is read only under the feature). Risk (high): it is the only producer of the NDJSON contract and runs on a Linux target that this Windows host cannot execute; tests run the host build against fixture roots, and the Linux-only parts (HOME resolution, distro name) are injected parameters so they are covered too.",
+      "design_refs": [
+        "6. WSL ヘルパー",
+        "6.3 診断コードと NDJSON 受信",
+        "6.2 ヘルパー CLI",
+        "10. プライバシー"
+      ],
+      "depends_on": [
+        "T006",
+        "T008",
+        "T010",
+        "T022"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-wsl-helper/src/serve.rs",
+          "kind": "add",
+          "note": "serve loop, diff tracking, heartbeat via Clock"
+        },
+        {
+          "path": "crates/lens-wsl-helper/src/main.rs",
+          "kind": "modify",
+          "note": "dispatch serve; fault_inject panic hook"
+        },
+        {
+          "path": "crates/lens-wsl-helper/Cargo.toml",
+          "kind": "modify",
+          "note": "jsonschema dev-dependency; fault_inject feature"
+        },
+        {
+          "path": "crates/lens-wsl-helper/tests/serve.rs",
+          "kind": "add",
+          "note": "output contract tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-wsl-helper --test serve first_line_is_hello_protocol_1` exit 0: first stdout line has type=hello and protocol=1; a source_health line for every source appears before any session_upsert.",
+        "`cargo test -p lens-wsl-helper --test serve partial_unreadable_root_continues` exit 0: roots [unreadable, fixture] -> an `error` line with code root_unreadable and still at least one session_upsert.",
+        "`cargo test -p lens-wsl-helper --test serve no_raw_token_in_output` exit 0: fixture session text with `ghp_` + 36 chars -> stdout contains `[REDACTED]` and not the raw token. Second command: `cargo test -p lens-wsl-helper --test serve every_line_valid_and_bounded` exit 0: each stdout line validates against Msg in schema/lens.schema.json and is <= 4194304 B.",
+        "`cargo test -p lens-wsl-helper --test serve heartbeat_every_10s_fake_clock` exit 0: FakeClock +9 s -> 0 heartbeats after hello; +10 s -> 1; session_remove emitted after the fixture log is deleted.",
+        "`cargo test -p lens-wsl-helper --features fault_inject --test serve f29e_panic_exits_101` exits 0: with LENS_FAULT=panic the process exits 101 and stderr is exactly `internal` (F29e).",
+        "Stop state: helper emits the full NDJSON contract and F29e is proven; Lens does not launch it. Not usable yet, observable as `rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit; the helper writes only to stdout/stderr; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-wsl-helper --test serve -- --list 2>/dev/null | rg -c '^(first_line_is_hello_protocol_1|partial_unreadable_root_continues|no_raw_token_in_output|every_line_valid_and_bounded|heartbeat_every_10s_fake_clock): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-wsl-helper --test serve",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test -p lens-wsl-helper --features fault_inject --test serve f29e_panic_exits_101",
+          "expect_exit_code": 0,
+          "note": "F29e; the test is #[cfg(feature = \"fault_inject\")] so only this invocation runs it."
+        },
+        {
+          "command": "test \"$(cargo test -p lens-wsl-helper --features fault_inject --test serve -- --list 2>/dev/null | rg -c '^(f29e_panic_exits_101): test$')\" = 1",
+          "expect_exit_code": 0,
+          "note": "Asserts all 1 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T025",
+      "title": "Read-only guarantee end-to-end",
+      "intent": "Integration test over a fixture tree (writable, read-only and unreadable files in the Claude and Codex layouts): compute SHA-256 and mtime of every fixture before and after a full engine scan plus appends driven through the Engine (the comment documents the Get-FileHash -Algorithm SHA256 / sha256sum equivalent); the unreadable file is reported access_denied; a source scan asserts no write-capable open exists in crates/*/src. It depends only on the initial-scan task, whose access_denied state it needs, so it is placed at the earliest layer its dependencies allow (layer 8 of the DAG). Risk (medium): making a file unreadable is OS-specific (ACL deny on Windows via icacls, chmod 000 on unix); if the test host cannot create an unreadable file the unreadable case falls back to the injected opener used by the initial-scan task and the test records which variant ran.",
+      "design_refs": [
+        "1. 原則と構成",
+        "11. 故障モード対応と受け入れ試験（1 故障 = 1 機構 = 1 試験。pass は期待値との完全一致）"
+      ],
+      "depends_on": [
+        "T022"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/tests/readonly.rs",
+          "kind": "add",
+          "note": "fixture tree, hash/mtime before-after, source grep"
+        },
+        {
+          "path": "crates/lens-core/Cargo.toml",
+          "kind": "modify",
+          "note": "dev-dependencies sha2, filetime"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test readonly f22_hash_and_mtime_unchanged_after_scan` exit 0: F22: every fixture file (writable, read-only, unreadable) has identical SHA-256 and mtime string before and after scan + appends by Engine; unreadable file reported access_denied.",
+        "`cargo test -p lens-core --test readonly no_write_capable_open_in_sources` exit 0: scans crates/*/src and src-tauri/src for `.write(true)`, `.append(true)`, `.create(true)`, `.create_new(true)`, `File::create` outside settings.rs -> 0 hits.",
+        "`rg -n \"\\.(write|append|create|create_new)\\(true\\)|File::create\" crates src-tauri/src --glob '*.rs' --glob '!**/tests/**' --glob '!settings.rs'` exits 1 (static twin of the test; settings.rs writes only its own file).",
+        "Stop state: F22 guarantee proven for the engine as it stands; no new feature. Not usable yet, observable as `rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T034); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test readonly -- --list 2>/dev/null | rg -c '^(f22_hash_and_mtime_unchanged_after_scan|no_write_capable_open_in_sources): test$')\" = 2",
+          "expect_exit_code": 0,
+          "note": "Asserts all 2 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test readonly",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"\\.(write|append|create|create_new)\\(true\\)|File::create\" crates src-tauri/src --glob '*.rs' --glob '!**/tests/**' --glob '!settings.rs'",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T026",
+      "title": "Aggregator 2/2: own-repo listing, outgoing sanitization, change events",
+      "intent": "Finish aggregator.rs: sanitize() on every outgoing string, projects_changed emitted only when content or order changes, and Lens's own repository is NOT excluded (F15, documented unprotectable limit). Risk (medium): change detection must compare content and order exactly; the tests pin identical re-evaluation against reordered output.",
+      "design_refs": [
+        "8. IPC と実装",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "3.3 数値の往復検算",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T023"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/aggregator.rs",
+          "kind": "modify",
+          "note": "outgoing sanitize, change detection"
+        },
+        {
+          "path": "crates/lens-core/tests/aggregator.rs",
+          "kind": "modify",
+          "note": "F15, sanitization, projects_changed tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test aggregator f15_own_repo_session_is_listed` exit 0: F15: a running session whose cwd is Lens's own repository appears in list_projects output (documented unprotectable limit, asserted as present).",
+        "`cargo test -p lens-core --test aggregator outgoing_payload_sanitized` exit 0: session text containing `ghp_` + 36 chars -> every outgoing string contains `[REDACTED]` and none contains the raw token.",
+        "`cargo test -p lens-core --test aggregator projects_changed_only_on_change` exit 0: two consecutive re-evaluations with identical content and order -> exactly 1 projects_changed total; a changed order -> a second one.",
+        "Stop state: aggregation library complete and covered; no IPC/Tauri exposure. Not usable yet, observable as `rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f25a_unknown_key_project_not_found)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T027, T028); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test aggregator -- --list 2>/dev/null | rg -c '^(f15_own_repo_session_is_listed|outgoing_payload_sanitized|projects_changed_only_on_change): test$')\" = 3",
+          "expect_exit_code": 0,
+          "note": "Asserts all 3 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test aggregator",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f11a_heartbeat_silence_29_vs_30|f25a_unknown_key_project_not_found)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T027",
+      "title": "Helper supervisor 1/3: launch, heartbeat timeout, backoff, stopped state",
+      "intent": "Add supervisor.rs with a `Launcher` trait (real impl through process.rs, fake for tests). Launch command: `wsl.exe -d <distro> --exec <helperPath|HELPER_PATH> serve --protocol 1 [--roots <path>...]`. No heartbeat for HB_TIMEOUT_SECS (30) or process exit => restart after backoff_secs(n) (from the change-detector module) if the distro is running, else enter the stopped state: originAvailable=false, updating=false, no updatingConfidence, lastUpdatedAt kept, SourceHealth.state distro_stopped, zero `wsl.exe -d` launches. A restart rebuilds state and rescans from the hello. A missing helper binary -> SourceHealth helper_unavailable with detail helper_not_found. Risk (high): how a real wsl.exe reports a missing --exec target (exit code, stderr text) is not specified by the design, so the mapping lives in the Launcher implementation and only the fake path is tested; the Windows-only real launch is checked manually, not by cargo test.",
+      "design_refs": [
+        "6. WSL ヘルパー",
+        "6.1 設定（settings.json）",
+        "3.3 数値の往復検算",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T004",
+        "T008",
+        "T009",
+        "T011",
+        "T016",
+        "T017",
+        "T020",
+        "T026"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/supervisor.rs",
+          "kind": "add",
+          "note": "Launcher trait, heartbeat watchdog, restart scheduling, stopped state"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod supervisor"
+        },
+        {
+          "path": "crates/lens-core/tests/supervisor_lifecycle.rs",
+          "kind": "add",
+          "note": "F11a, F11b, F12, launch command, helper_not_found"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test supervisor_lifecycle f11a_heartbeat_silence_29_vs_30` exit 0: FakeClock: silence for 29 s -> restarts == 0; silence for 30 s -> restarts == 1.",
+        "`cargo test -p lens-core --test supervisor_lifecycle f11b_eight_failures_backoff_waits` exit 0: F11b: 8 consecutive launch failures -> waits 1, 2, 4, 8, 16, 32, 60, 60 s; a failure after one success -> wait 1 s.",
+        "`cargo test -p lens-core --test supervisor_lifecycle f12_stopped_distro_state` exit 0: F12: distro not running -> originAvailable=false, updating=false, updatingConfidence absent, lastUpdatedAt equal to its previous value, SourceHealth.state=distro_stopped, `wsl.exe -d` launch count 0.",
+        "`cargo test -p lens-core --test supervisor_lifecycle launch_command_line` exit 0: Ubuntu with default helper -> argv [`wsl.exe`,`-d`,`Ubuntu`,`--exec`,`/usr/local/bin/lens-wsl-helper`,`serve`,`--protocol`,`1`]; with sourceRoots claude path `/home/u/x` -> `--roots /home/u/x` appended.",
+        "`cargo test -p lens-core --test supervisor_lifecycle missing_helper_is_helper_not_found` exit 0: fake launcher returns NotFound -> SourceHealth.state=helper_unavailable, detail helper_not_found, no restart loop beyond backoff.",
+        "Stop state: supervisor core with a fake launcher; exit-code policy, redaction path and settings reflection come with the next supervisor tasks. Not usable yet, observable as `rg -n \"fn (f13a_hello_protocol_2_no_restart|f31_leaked_token_redacted_before_ipc)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet); `rg -n \"ipc::|supervisor::\" src-tauri/src` exits 1 (src-tauri/src does not use ipc or supervisor yet). Revert: `git revert` of this task's commit after reverting its dependents (T029, T030, T032); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test supervisor_lifecycle -- --list 2>/dev/null | rg -c '^(f11a_heartbeat_silence_29_vs_30|f11b_eight_failures_backoff_waits|f12_stopped_distro_state|launch_command_line|missing_helper_is_helper_not_found): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test supervisor_lifecycle",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f13a_hello_protocol_2_no_restart|f31_leaked_token_redacted_before_ipc)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        },
+        {
+          "command": "rg -n \"ipc::|supervisor::\" src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: src-tauri/src does not use ipc or supervisor yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T028",
+      "title": "IPC layer 1/2: read commands list_projects, get_project_detail, get_health",
+      "intent": "Add ipc.rs (no Tauri types), read side: list_projects (not_ready while the first scan runs; ordered by lastUpdatedAt desc), get_project_detail (invalid_argument for empty key, project_not_found for an unknown key), get_health (not_ready only before the Aggregator has started; partial SourceHealth[] during the first scan; no other code) and the IpcError type. Risk (medium): the not_ready window depends on Aggregator start state, which the tests fix with an injected fake. Write commands, events and sanitization follow in T031.",
+      "design_refs": [
+        "8. IPC と実装",
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）",
+        "10. プライバシー",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T026"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/ipc.rs",
+          "kind": "add",
+          "note": "IpcError, list_projects, get_project_detail, get_health"
+        },
+        {
+          "path": "crates/lens-core/src/lib.rs",
+          "kind": "modify",
+          "note": "pub mod ipc"
+        },
+        {
+          "path": "crates/lens-core/tests/ipc.rs",
+          "kind": "add",
+          "note": "F25a, F25c"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test ipc f25a_unknown_key_project_not_found` exit 0: F25a: get_project_detail {key:\"nope\"} -> IpcError project_not_found.",
+        "`cargo test -p lens-core --test ipc f25a_empty_key_invalid_argument` exit 0: F25a: get_project_detail {key:\"\"} -> IpcError invalid_argument.",
+        "`cargo test -p lens-core --test ipc f25c_get_health_not_ready_then_partial` exit 0: F25c: before Aggregator start -> not_ready; during the first scan -> SourceHealth[] with >= 1 entry; no other error code is ever returned.",
+        "`cargo test -p lens-core --test ipc list_projects_not_ready_during_first_scan` exit 0: list_projects while the first scan runs -> not_ready; afterwards -> array ordered by lastUpdatedAt desc.",
+        "Stop state: read commands of the IPC layer tested without Tauri; write commands, events and payload sanitization missing. Not usable yet, observable as `rg -n \"fn (f23_unc_wsl_localhost_path_invalid)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit after reverting its dependents (T031); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test ipc -- --list 2>/dev/null | rg -c '^(f25a_unknown_key_project_not_found|f25a_empty_key_invalid_argument|f25c_get_health_not_ready_then_partial|list_projects_not_ready_during_first_scan): test$')\" = 4",
+          "expect_exit_code": 0,
+          "note": "Asserts all 4 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test ipc",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (f23_unc_wsl_localhost_path_invalid)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T029",
+      "title": "Helper supervisor 2/3: exit-code and version policy",
+      "intent": "Extend supervisor.rs with the section 6.2 mapping applied to the child's exit code and to the NDJSON stop signal: exit 2 -> SourceHealth helper_unavailable (detail usage_error), no restart; exit 3 or hello.protocol != 1 -> helper_version_mismatch, no restart; exit 4, 5 or 101 -> restart after backoff_secs (1 s for the first failure), and after the restart hello and a full session_upsert set are received again. Risk (medium): the fake helper must replay exact sequences; whether a real helper's stderr code and exit code always agree is assumed from the CLI task, not re-verified here.",
+      "design_refs": [
+        "6.2 ヘルパー CLI",
+        "6. WSL ヘルパー",
+        "3.3 数値の往復検算"
+      ],
+      "depends_on": [
+        "T027"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/supervisor.rs",
+          "kind": "modify",
+          "note": "exit-code mapping, no-restart flags, resend after restart"
+        },
+        {
+          "path": "crates/lens-core/tests/supervisor_exit.rs",
+          "kind": "add",
+          "note": "F13a (supervisor), F29a-F29e"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test supervisor_exit f13a_hello_protocol_2_no_restart` exit 0: F13a: fake helper sends hello protocol=2 -> state helper_version_mismatch, restarts == 0.",
+        "`cargo test -p lens-core --test supervisor_exit f29a_exit_2_usage_error_no_restart` exit 0: F29a: exit 2 + stderr usage_error -> helper_unavailable with detail usage_error, restarts == 0.",
+        "`cargo test -p lens-core --test supervisor_exit f29b_exit_3_version_mismatch_no_restart` exit 0: F29b: exit 3 + stderr protocol_unsupported -> helper_version_mismatch, restarts == 0.",
+        "`cargo test -p lens-core --test supervisor_exit f29c_exit_4_restarts_after_1s` exit 0: F29c: exit 4 (root_unreadable) -> restart scheduled after 1 s of FakeClock, not before (0 s -> no launch, 1 s -> 1 launch). Second command: `cargo test -p lens-core --test supervisor_exit f29d_exit_5_restarts_after_1s` exit 0: F29d: exit 5 (stdout_failed) -> restart after 1 s.",
+        "`cargo test -p lens-core --test supervisor_exit f29e_exit_101_restart_resends_hello_and_upserts` exit 0: F29e: exit 101 (internal) -> restart after 1 s and the fake helper's second run delivers hello then the full upsert set (2 sessions).",
+        "Stop state: complete exit/version policy over the fake launcher; settings reflection and ingest redaction still missing. Not usable yet, observable as `rg -n \"ipc::|supervisor::\" src-tauri/src` exits 1 (src-tauri/src does not use ipc or supervisor yet). Revert: `git revert` of this task's commit after reverting its dependents (T032); no data migration; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test supervisor_exit -- --list 2>/dev/null | rg -c '^(f13a_hello_protocol_2_no_restart|f29a_exit_2_usage_error_no_restart|f29b_exit_3_version_mismatch_no_restart|f29c_exit_4_restarts_after_1s|f29d_exit_5_restarts_after_1s|f29e_exit_101_restart_resends_hello_and_upserts): test$')\" = 6",
+          "expect_exit_code": 0,
+          "note": "Asserts all 6 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test supervisor_exit",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"ipc::|supervisor::\" src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: src-tauri/src does not use ipc or supervisor yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T030",
+      "title": "Helper supervisor 3/3: ingest path, clock offset and settings reflection",
+      "intent": "Finish supervisor.rs: apply clockOffset (from the clock-offset module) to incoming lastActivityAt; sanitize() every incoming session again so a fake helper that leaks `ghp_` + 36 chars still yields `[REDACTED]` in the sessions delivered to the Aggregator/IPC layer; settings reflection timing: helperPath and sourceRoots are read only at the next helper launch, disabledDistros at the next DISTRO_POLL_SECS (60) probe. Risk (medium): the reflection-time rules depend on exactly when the settings snapshot is read relative to the probe tick; the tests fix the 59 s / 60 s boundary with FakeClock.",
+      "design_refs": [
+        "6.1 設定（settings.json）",
+        "6.3 診断コードと NDJSON 受信",
+        "10. プライバシー",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T010",
+        "T027"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/supervisor.rs",
+          "kind": "modify",
+          "note": "offset application, re-redaction, settings snapshot at launch/poll"
+        },
+        {
+          "path": "crates/lens-core/tests/supervisor_ingest.rs",
+          "kind": "add",
+          "note": "F31, F32, offset tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test supervisor_ingest f31_leaked_token_redacted_before_ipc` exit 0: F31: fake helper session_upsert text contains `ghp_` + 36 chars -> delivered session text contains `[REDACTED]` and not the raw token.",
+        "`cargo test -p lens-core --test supervisor_ingest f32_helper_path_applies_at_next_launch` exit 0: F32: helperPath=/opt/h saved while running -> running launch command unchanged; after a restart the launch argv contains `/opt/h`.",
+        "`cargo test -p lens-core --test supervisor_ingest f32_disabled_distro_applies_at_poll_tick` exit 0: F32: Ubuntu added to disabledDistros -> still monitored at FakeClock +59 s, stopped at +60 s.",
+        "`cargo test -p lens-core --test supervisor_ingest f32_source_roots_apply_at_next_launch` exit 0: F32: sourceRoots claude-local path changed while running -> `--roots` in argv unchanged until restart.",
+        "`cargo test -p lens-core --test supervisor_ingest clock_offset_applied_to_last_activity` exit 0: helper clock 8 s behind (offset_ms 8000): helper lastActivityAt 11:59:50.000 is delivered as 11:59:58.000 and a +/-5000 ms offset leaves it unchanged.",
+        "Stop state: supervisor complete against fakes; the app does not start it yet. Not usable yet, observable as `rg -n \"ipc::|supervisor::\" src-tauri/src` exits 1 (src-tauri/src does not use ipc or supervisor yet). Revert: `git revert` of this task's commit; persisted state: only reads settings.json (helperPath, sourceRoots, disabledDistros), never writes; no cleanup after revert. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test supervisor_ingest -- --list 2>/dev/null | rg -c '^(f31_leaked_token_redacted_before_ipc|f32_helper_path_applies_at_next_launch|f32_disabled_distro_applies_at_poll_tick|f32_source_roots_apply_at_next_launch|clock_offset_applied_to_last_activity): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test supervisor_ingest",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"ipc::|supervisor::\" src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: src-tauri/src does not use ipc or supervisor yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T031",
+      "title": "IPC layer 2/2: write commands, Ev events, payload sanitization",
+      "intent": "Extend ipc.rs, write side: set_distro_enabled (invalid_argument, distro_not_found, settings_save_failed), set_source_root (source_not_found; path_invalid unless the Windows path is drive-absolute or the WSL path starts with `/`; UNC `\\\\...` and unreadable paths are rejected; null resets to default); events projects_changed {upserts, removes, order}, project_detail_changed {key}, health_changed {sources} as Ev; IpcError.message never carries body text or paths; payloads sanitized and truncated before leaving. Risk (medium): the 'unreadable path' check touches the filesystem, so it takes an injected `PathProbe`; real Windows drive/UNC semantics are covered by string cases only. These are the first commands that can write settings.json at run time (through SettingsFs).",
+      "design_refs": [
+        "8. IPC と実装",
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）",
+        "10. プライバシー",
+        "12. 防御のトレードオフ"
+      ],
+      "depends_on": [
+        "T016",
+        "T017",
+        "T028"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/src/ipc.rs",
+          "kind": "modify",
+          "note": "set_distro_enabled, set_source_root, Ev builders, PathProbe, sanitize"
+        },
+        {
+          "path": "crates/lens-core/tests/ipc.rs",
+          "kind": "modify",
+          "note": "F23, F30 and Ev schema tests"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test ipc f23_unc_wsl_localhost_path_invalid` exit 0: F23: set_source_root {sourceId:\"claude-local\", path:\"\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\u\"} -> path_invalid.",
+        "`cargo test -p lens-core --test ipc set_source_root_path_rules` exit 0: `C:\\x` ok; `x\\y` path_invalid; for wsl:Ubuntu:claude `/home/u` ok and `home/u` path_invalid; sourceId `nope` -> source_not_found; path null -> default restored.",
+        "`cargo test -p lens-core --test ipc set_distro_enabled_errors` exit 0: distro \"\" -> invalid_argument; unknown distro -> distro_not_found; failing SettingsFs -> settings_save_failed.",
+        "`cargo test -p lens-core --test ipc ev_and_ipc_error_match_schema` exit 0: every emitted Ev (3 variants) and IpcError validates against schema/lens.schema.json and IpcError.message contains neither a path nor a body fragment.",
+        "`cargo test -p lens-core --test ipc f30_ipc_payload_truncated_nothing_on_disk` exit 0: F30: utterance of 2001 chars -> IPC payload holds the first 2000 chars; scanning the temp directory used by the test finds no file containing the 2001-char text.",
+        "Stop state: IPC layer complete and tested without Tauri; the app is still on the v3 Tauri path. Not usable yet, observable as `rg -n \"ipc::|supervisor::\" src-tauri/src` exits 1 (src-tauri/src does not use ipc or supervisor yet). Revert: `git revert` of this task's commit; persisted state: set_distro_enabled and set_source_root are the first commands able to write settings.json at run time (through SettingsFs); after a revert an existing file keeps its version=1 content and is ignored by the older build; delete %APPDATA%\\agent-session-lens\\settings.json by hand to reset, git revert does not touch it. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test ipc -- --list 2>/dev/null | rg -c '^(f23_unc_wsl_localhost_path_invalid|set_source_root_path_rules|set_distro_enabled_errors|ev_and_ipc_error_match_schema|f30_ipc_payload_truncated_nothing_on_disk): test$')\" = 5",
+          "expect_exit_code": 0,
+          "note": "Asserts all 5 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test ipc",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"ipc::|supervisor::\" src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: src-tauri/src does not use ipc or supervisor yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T032",
+      "title": "Tauri wiring: commands, events, capabilities (get_snapshot kept as shim)",
+      "intent": "Replace the v3 ingest thread in src-tauri/src/main.rs with thin #[tauri::command] wrappers over ipc.rs for the 5 design commands, emit projects_changed / project_detail_changed / health_changed, start the Aggregator and supervisors in setup and stop them on exit; capabilities become core:default plus event listen/unlisten; tauri.conf.json already has the required CSP (`default-src 'self'` ..., no remote origin) and needs no edit, which the check below proves. IMPORTANT (get_snapshot hole): src/App.tsx still calls invoke(\"get_snapshot\") until T033, so this task KEEPS a compatibility shim `get_snapshot` that returns Option<serde_json::Value>::None (the existing `s && setSnap(s)` handles null) and registers it next to the 5 commands; the old Latest state, runtime thread and `use lens_core::{runtime, Snapshot}` are removed here, and T033 deletes the shim together with its last caller. TypeScript is not touched, so `npm run build` stays green. Risk (medium): Tauri v2 command/event wiring and capability identifiers are checked only by compilation plus the static checks below; an actual window run is manual.",
+      "design_refs": [
+        "8. IPC と実装",
+        "9. UI と安全"
+      ],
+      "depends_on": [
+        "T027",
+        "T029",
+        "T030",
+        "T031"
+      ],
+      "changes": [
+        {
+          "path": "src-tauri/src/main.rs",
+          "kind": "modify",
+          "note": "5 commands + get_snapshot shim, event emit, startup/shutdown, drop v3 thread"
+        },
+        {
+          "path": "src-tauri/capabilities/default.json",
+          "kind": "modify",
+          "note": "permissions: core:default, core:event:allow-listen, core:event:allow-unlisten"
+        }
+      ],
+      "acceptance": [
+        "`test \"$(rg -U -o 'generate_handler!\\[[^]]*\\]' src-tauri/src/main.rs | tr -d ' \\r\\n' | sed 's/,\\]/]/')\" = 'generate_handler![list_projects,get_project_detail,get_health,set_distro_enabled,set_source_root,get_snapshot]'` exits 0 (exactly the 5 design commands plus the get_snapshot shim, in this order).",
+        "`node -e` check of src-tauri/capabilities/default.json: sorted permission identifiers equal `core:default,core:event:allow-listen,core:event:allow-unlisten` (exit 0).",
+        "`node -e` check of src-tauri/tauri.conf.json: app.security.csp starts with `default-src 'self'` and matches no `https?://` origin other than `http://ipc.localhost` (exit 0).",
+        "`cargo build -p agent-session-lens` and `cargo clippy -p agent-session-lens -- -D warnings -A clippy::collapsible_match -A clippy::large_enum_variant -A clippy::type_complexity -A clippy::unnecessary_map_or -A clippy::unnecessary_sort_by` exit 0; `npm run build` exits 0 with the unchanged App.tsx.",
+        "Stop state: backend complete and wired (live updates via events); the old UI still renders but stays empty because get_snapshot returns null and the `snapshot` event no longer fires, so the app is not user-usable until the UI task. Not usable yet, observable as `rg -n \"list_projects\" src` exits 1 (src/ does not call list_projects yet). Revert: `git revert` of this task's commit; persisted state: the app now reads settings.json at start-up and the IPC commands may write it; after a revert the v3 build ignores an existing %APPDATA%\\agent-session-lens\\settings.json (delete by hand to reset); capabilities/default.json is restored by the same revert. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(rg -U -o 'generate_handler!\\[[^]]*\\]' src-tauri/src/main.rs | tr -d ' \\r\\n' | sed 's/,\\]/]/')\" = 'generate_handler![list_projects,get_project_detail,get_health,set_distro_enabled,set_source_root,get_snapshot]'",
+          "expect_exit_code": 0,
+          "note": "Handler list is exact."
+        },
+        {
+          "command": "node -e \"const c=require('./src-tauri/capabilities/default.json');const p=c.permissions.map(x=>typeof x==='string'?x:x.identifier).sort().join();process.exit(p==='core:default,core:event:allow-listen,core:event:allow-unlisten'?0:1)\"",
+          "expect_exit_code": 0,
+          "note": "Capability set is exact."
+        },
+        {
+          "command": "node -e \"const c=require('./src-tauri/tauri.conf.json').app.security.csp;const bad=(c.match(/https?:\\/\\/[^\\s;]+/g)||[]).filter(u=>u!=='http://ipc.localhost');process.exit(c.startsWith(\\\"default-src 'self'\\\")&&bad.length===0?0:1)\"",
+          "expect_exit_code": 0,
+          "note": "CSP shape."
+        },
+        {
+          "command": "cargo build -p agent-session-lens",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo clippy -p agent-session-lens -- -D warnings -A clippy::collapsible_match -A clippy::large_enum_variant -A clippy::type_complexity -A clippy::unnecessary_map_or -A clippy::unnecessary_sort_by",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "npm run build",
+          "expect_exit_code": 0,
+          "note": "tsc --noEmit + vite build stay green."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"list_projects\" src",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: src/ does not call list_projects yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T033",
+      "title": "Frontend UI: types, one row per project, relative time, remove get_snapshot shim",
+      "intent": "Rewrite src/types.ts to the section 7 types (and fix its first-line comment that still names crates/asl-core) and src/App.tsx to: call list_projects / get_health and listen to projects_changed / project_detail_changed / health_changed (retry on not_ready); render one row per project in the given order with the name, `更新中` (low => `更新中?`) or the relative time, and the agents; WSL rows show `(WSL: <distro>)`, originAvailable=false shows `停止中`; Health must not hide format changes at count 0; detail refetch on project_detail_changed; text only through React text nodes. src/format.ts exports relativeTime(ageS, source?) = `${floor(ageS/60)}分前` (ageS < 60 -> `1分未満`; source file_mtime prefixed `~`) and updatingLabel(updating, confidence). Remove the get_snapshot shim and its last caller (the invoke in App.tsx). Risk (medium): there is no JS unit-test runner in the repo, so format.ts is pure and checked by a node one-liner (Node 24 strips types); the rendered layout is checked by type-check/build only and a manual look.",
+      "design_refs": [
+        "9. UI と安全",
+        "4. 「更新」の定義",
+        "3.1 stale と status（適用順は # の昇順。最初に当たった行を採るので 1 が 5 に必ず先行する）",
+        "7. データモデルと JSON Schema（draft-07。IPC と NDJSON の唯一の型定義）"
+      ],
+      "depends_on": [
+        "T032"
+      ],
+      "changes": [
+        {
+          "path": "src/types.ts",
+          "kind": "modify",
+          "note": "section 7 types; comment no longer names asl-core"
+        },
+        {
+          "path": "src/App.tsx",
+          "kind": "modify",
+          "note": "list_projects/get_health, three events, rows, Health panel"
+        },
+        {
+          "path": "src/format.ts",
+          "kind": "add",
+          "note": "relativeTime, updatingLabel"
+        },
+        {
+          "path": "src-tauri/src/main.rs",
+          "kind": "modify",
+          "note": "delete the get_snapshot shim and its registration"
+        }
+      ],
+      "acceptance": [
+        "`node -e` import of ./src/format.ts exits 0 when relativeTime(180)=='3分前', relativeTime(239)=='3分前', relativeTime(240)=='4分前', relativeTime(59)=='1分未満', relativeTime(60)=='1分前', relativeTime(180,'file_mtime')=='~3分前', updatingLabel(true,'high')=='更新中' and updatingLabel(true,'low')=='更新中?'.",
+        "`rg -n \"dangerouslySetInnerHTML|innerHTML|get_snapshot\" src src-tauri/src` exits 1 (no HTML injection path, shim and its caller gone).",
+        "`test \"$(rg -U -o 'generate_handler!\\[[^]]*\\]' src-tauri/src/main.rs | tr -d ' \\r\\n' | sed 's/,\\]/]/')\" = 'generate_handler![list_projects,get_project_detail,get_health,set_distro_enabled,set_source_root]'` exits 0 (exactly 5 commands).",
+        "`rg -n \"asl[-_]core\" src` exits 1; `npm run build` exits 0 (tsc --noEmit strict + vite build); `rg -c \"export (interface|type) (ProjectActivity|UnifiedSession|SourceHealth|Settings|IpcError|Detail|Ev)\\b\" src/types.ts` prints 7.",
+        "`rg -n \"\\x{505C}\\x{6B62}\\x{4E2D}\" src/App.tsx` exits 0 (the stopped-origin label), `rg -n \"\\(WSL: \" src/App.tsx` exits 0 (the WSL suffix literal) and `rg -n \"\\x{66F4}\\x{65B0}\\x{4E2D}\" src/App.tsx src/format.ts` exits 0 (the updating label); all three are literal React text.",
+        "Stop state: app fully usable end to end (rows, live updates, Health). Not usable yet, observable as `rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates` exits 1 (the first test of each downstream task does not exist yet). Revert: `git revert` of this task's commit; restores App.tsx, types.ts and the get_snapshot shim together; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "node -e 'import(\"./src/format.ts\").then(m=>{const ok=m.relativeTime(180)===\"3\\u5206\\u524d\"&&m.relativeTime(239)===\"3\\u5206\\u524d\"&&m.relativeTime(240)===\"4\\u5206\\u524d\"&&m.relativeTime(59)===\"1\\u5206\\u672a\\u6e80\"&&m.relativeTime(60)===\"1\\u5206\\u524d\"&&m.relativeTime(180,\"file_mtime\")===\"~3\\u5206\\u524d\"&&m.updatingLabel(true,\"high\")===\"\\u66f4\\u65b0\\u4e2d\"&&m.updatingLabel(true,\"low\")===\"\\u66f4\\u65b0\\u4e2d?\";process.exit(ok?0:1)})'",
+          "expect_exit_code": 0,
+          "note": "Table check of the section 4 relative-time rule (180<=age_s<=239 -> 3分前)."
+        },
+        {
+          "command": "rg -n \"dangerouslySetInnerHTML|innerHTML|get_snapshot\" src src-tauri/src",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "test \"$(rg -U -o 'generate_handler!\\[[^]]*\\]' src-tauri/src/main.rs | tr -d ' \\r\\n' | sed 's/,\\]/]/')\" = 'generate_handler![list_projects,get_project_detail,get_health,set_distro_enabled,set_source_root]'",
+          "expect_exit_code": 0,
+          "note": "Exactly 5 commands."
+        },
+        {
+          "command": "rg -n \"asl[-_]core\" src",
+          "expect_exit_code": 1,
+          "note": "rg exits 1 when nothing matches."
+        },
+        {
+          "command": "test \"$(rg -c 'export (interface|type) (ProjectActivity|UnifiedSession|SourceHealth|Settings|IpcError|Detail|Ev)\\b' src/types.ts)\" = 7",
+          "expect_exit_code": 0,
+          "note": "All 7 types declared."
+        },
+        {
+          "command": "npm run build",
+          "expect_exit_code": 0,
+          "note": "tsc --noEmit + vite build stay green."
+        },
+        {
+          "command": "cargo build -p agent-session-lens",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "rg -n \"\\x{505C}\\x{6B62}\\x{4E2D}\" src/App.tsx",
+          "expect_exit_code": 0,
+          "note": "Stopped label present."
+        },
+        {
+          "command": "rg -n \"\\(WSL: \" src/App.tsx",
+          "expect_exit_code": 0,
+          "note": "WSL suffix literal present."
+        },
+        {
+          "command": "rg -n \"\\x{66F4}\\x{65B0}\\x{4E2D}\" src/App.tsx src/format.ts",
+          "expect_exit_code": 0,
+          "note": "Updating label present."
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0,
+          "note": "Green-at-stop gate: every crate incl. src-tauri compiles and passes."
+        },
+        {
+          "command": "rg -n \"fn (every_f_id_maps_to_existing_test_fn)\\b\" crates",
+          "expect_exit_code": 1,
+          "note": "Not-usable check, valid only at this task's stop point: the first test of each downstream task does not exist yet."
+        }
+      ],
+      "estimate_rounds": 2
+    },
+    {
+      "id": "T034",
+      "title": "Closing traceability audit and whole-workspace gates",
+      "intent": "Add tests/traceability.rs and tests/traceability.json: the test parses every F-id of docs/architecture-v5.md section 11 (54 ids F1a..F32) and requires that tests/traceability.json maps each to an existing `fn <name>` in crates/*/tests/*.rs (F14, F15, F18 map to tests of the documented limit); it also lists each section 12 mechanism against a test or an accepted-limit note. Then run the whole-workspace gates. No product code changes. Risk (low): the only uncertainty is test-name drift between this plan and the final code; the audit exists to catch exactly that.",
+      "design_refs": [
+        "11. 故障モード対応と受け入れ試験（1 故障 = 1 機構 = 1 試験。pass は期待値との完全一致）",
+        "12. 防御のトレードオフ",
+        "3.3 数値の往復検算",
+        "1. 原則と構成"
+      ],
+      "depends_on": [
+        "T024",
+        "T025",
+        "T033"
+      ],
+      "changes": [
+        {
+          "path": "crates/lens-core/tests/traceability.rs",
+          "kind": "add",
+          "note": "parses section 11 ids and checks fn existence"
+        },
+        {
+          "path": "crates/lens-core/tests/traceability.json",
+          "kind": "add",
+          "note": "F-id -> {file, fn} mapping, 54 entries"
+        }
+      ],
+      "acceptance": [
+        "`cargo test -p lens-core --test traceability every_f_id_maps_to_existing_test_fn` exit 0: 54 F-ids parsed from section 11 (F1a, F1b, F2..F32 incl. F8a-c, F10a-b, F11a-c, F13a-f, F16a-d, F23/F23a/F23b, F25a-c, F29a-e) each map to a `fn` found by grep; a missing mapping fails with the F-id name.",
+        "`cargo test -p lens-core --test traceability traceability_json_has_54_entries` exit 0: traceability.json has exactly 54 keys and no key outside the section 11 id set.",
+        "`cargo clippy --workspace --all-targets -- -D warnings -A clippy::collapsible_match -A clippy::large_enum_variant -A clippy::type_complexity -A clippy::unnecessary_map_or -A clippy::unnecessary_sort_by` exits 0 and `cargo test --workspace` exits 0.",
+        "`npm run build` exits 0.",
+        "Stop state: this is the final task; stopping after it is the finished plan. Nothing downstream: no later task exists, so there is no not-usable check. Revert: `git revert` of this task's commit; adds only a test and its data file; no persisted state. Green: `cargo test --workspace`."
+      ],
+      "verify": [
+        {
+          "command": "test \"$(cargo test -p lens-core --test traceability -- --list 2>/dev/null | rg -c '^(every_f_id_maps_to_existing_test_fn|traceability_json_has_54_entries): test$')\" = 2",
+          "expect_exit_code": 0,
+          "note": "Asserts all 2 named tests exist (a filter matching nothing would still exit 0)."
+        },
+        {
+          "command": "cargo test -p lens-core --test traceability",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo test --workspace",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings -A clippy::collapsible_match -A clippy::large_enum_variant -A clippy::type_complexity -A clippy::unnecessary_map_or -A clippy::unnecessary_sort_by",
+          "expect_exit_code": 0
+        },
+        {
+          "command": "npm run build",
+          "expect_exit_code": 0,
+          "note": "tsc --noEmit + vite build stay green."
+        }
+      ],
+      "estimate_rounds": 2
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "agent-session-lens"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read-only dashboard of local AI agent sessions"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lens-core = { path = "../crates/lens-core" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }

@@ -1,0 +1,218 @@
+{
+ "F1a": {
+  "file": "crates/lens-core/tests/codex_parse.rs",
+  "fn": "f1a_fork_ordinal_excludes_inherited"
+ },
+ "F1b": {
+  "file": "crates/lens-core/tests/codex_parse.rs",
+  "fn": "f1b_fork_boundary_unknown"
+ },
+ "F2": {
+  "file": "crates/lens-core/tests/aggregator.rs",
+  "fn": "f2_child_idle_after_parent_end_turn"
+ },
+ "F3": {
+  "file": "crates/lens-core/tests/claude_parse.rs",
+  "fn": "f3_api_request_blob_not_fully_parsed"
+ },
+ "F4": {
+  "file": "crates/lens-core/tests/reader.rs",
+  "fn": "f4_invalid_utf8_line_dropped"
+ },
+ "F5": {
+  "file": "crates/lens-core/tests/reader.rs",
+  "fn": "f5_max_line_boundary_terminated"
+ },
+ "F6": {
+  "file": "crates/lens-core/tests/reader.rs",
+  "fn": "f6_incomplete_tail_holds_offset"
+ },
+ "F7": {
+  "file": "crates/lens-core/tests/reader.rs",
+  "fn": "f7_file_replaced_on_fileid_change_or_shrink"
+ },
+ "F8a": {
+  "file": "crates/lens-core/tests/change_detector.rs",
+  "fn": "hot_poll"
+ },
+ "F8b": {
+  "file": "crates/lens-core/tests/change_detector.rs",
+  "fn": "reconcile"
+ },
+ "F8c": {
+  "file": "crates/lens-core/tests/change_detector.rs",
+  "fn": "overflow"
+ },
+ "F9": {
+  "file": "crates/lens-core/tests/child_stdin.rs",
+  "fn": "f9_child_stdin_null_exits_zero_read_zero"
+ },
+ "F10a": {
+  "file": "crates/lens-core/tests/clock_offset.rs",
+  "fn": "f10a_threshold_cases"
+ },
+ "F10b": {
+  "file": "crates/lens-core/tests/clock_offset.rs",
+  "fn": "f10b_future_time_clamped_to_now"
+ },
+ "F11a": {
+  "file": "crates/lens-core/tests/supervisor_lifecycle.rs",
+  "fn": "f11a_heartbeat_silence_29_vs_30"
+ },
+ "F11b": {
+  "file": "crates/lens-core/tests/supervisor_lifecycle.rs",
+  "fn": "f11b_eight_failures_backoff_waits"
+ },
+ "F11c": {
+  "file": "crates/lens-core/tests/aggregator.rs",
+  "fn": "f11c_stale_observation_delay_all_phases"
+ },
+ "F12": {
+  "file": "crates/lens-core/tests/supervisor_lifecycle.rs",
+  "fn": "f12_stopped_distro_state"
+ },
+ "F13a": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13a_protocol_mismatch_stops"
+ },
+ "F13b": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13b_missing_required_field"
+ },
+ "F13c": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13c_unknown_type_ignored"
+ },
+ "F13d": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13d_oversized_line"
+ },
+ "F13e": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13e_malformed_json"
+ },
+ "F13f": {
+  "file": "crates/lens-core/tests/ndjson.rs",
+  "fn": "f13f_upsert_before_hello"
+ },
+ "F14": {
+  "file": "crates/lens-core/tests/status_table.rs",
+  "fn": "f14_unresolved_tool_use_700_is_stale_running"
+ },
+ "F15": {
+  "file": "crates/lens-core/tests/aggregator.rs",
+  "fn": "f15_own_repo_session_is_listed"
+ },
+ "F16a": {
+  "file": "crates/lens-core/tests/redact.rs",
+  "fn": "f16a_sk_key"
+ },
+ "F16b": {
+  "file": "crates/lens-core/tests/redact.rs",
+  "fn": "f16b_github_token"
+ },
+ "F16c": {
+  "file": "crates/lens-core/tests/redact.rs",
+  "fn": "f16c_aws_key_id"
+ },
+ "F16d": {
+  "file": "crates/lens-core/tests/redact.rs",
+  "fn": "f16d_named_secret_assignment"
+ },
+ "F17": {
+  "file": "crates/lens-core/tests/codex_parse.rs",
+  "fn": "f17_response_item_only_body"
+ },
+ "F18": {
+  "file": "crates/lens-core/tests/project.rs",
+  "fn": "f18_windows_key_case_insensitive"
+ },
+ "F19": {
+  "file": "crates/lens-core/tests/aggregator.rs",
+  "fn": "f19_guardian_review_not_activity"
+ },
+ "F20": {
+  "file": "crates/lens-core/tests/status_table.rs",
+  "fn": "f20_updating_599_600_601"
+ },
+ "F21": {
+  "file": "crates/lens-core/tests/initial_scan.rs",
+  "fn": "f21_seven_day_boundary"
+ },
+ "F22": {
+  "file": "crates/lens-core/tests/readonly.rs",
+  "fn": "f22_hash_and_mtime_unchanged_after_scan"
+ },
+ "F23": {
+  "file": "crates/lens-core/tests/ipc.rs",
+  "fn": "f23_unc_wsl_localhost_path_invalid"
+ },
+ "F23a": {
+  "file": "crates/lens-core/tests/project.rs",
+  "fn": "f23a_mnt_drive_maps_to_windows_key"
+ },
+ "F23b": {
+  "file": "crates/lens-core/tests/project.rs",
+  "fn": "f23b_wsl_localhost_converts_to_wsl_key"
+ },
+ "F24": {
+  "file": "crates/lens-core/tests/codex_parse.rs",
+  "fn": "f24_unknown_thread_source"
+ },
+ "F25a": {
+  "file": "crates/lens-core/tests/ipc.rs",
+  "fn": "f25a_unknown_key_project_not_found"
+ },
+ "F25b": {
+  "file": "crates/lens-core/tests/aggregator.rs",
+  "fn": "f25b_equal_time_name_ascending"
+ },
+ "F25c": {
+  "file": "crates/lens-core/tests/ipc.rs",
+  "fn": "f25c_get_health_not_ready_then_partial"
+ },
+ "F26": {
+  "file": "crates/lens-core/tests/settings.rs",
+  "fn": "f26_save_failure_leaves_memory_unchanged"
+ },
+ "F27": {
+  "file": "crates/lens-core/tests/settings.rs",
+  "fn": "f27_persist_exact_json"
+ },
+ "F28": {
+  "file": "crates/lens-core/tests/settings.rs",
+  "fn": "f28_invalid_json_defaults_and_bad_file"
+ },
+ "F29a": {
+  "file": "crates/lens-core/tests/supervisor_exit.rs",
+  "fn": "f29a_exit_2_usage_error_no_restart"
+ },
+ "F29b": {
+  "file": "crates/lens-core/tests/supervisor_exit.rs",
+  "fn": "f29b_exit_3_version_mismatch_no_restart"
+ },
+ "F29c": {
+  "file": "crates/lens-core/tests/supervisor_exit.rs",
+  "fn": "f29c_exit_4_restarts_after_1s"
+ },
+ "F29d": {
+  "file": "crates/lens-core/tests/supervisor_exit.rs",
+  "fn": "f29d_exit_5_restarts_after_1s"
+ },
+ "F29e": {
+  "file": "crates/lens-core/tests/supervisor_exit.rs",
+  "fn": "f29e_exit_101_restart_resends_hello_and_upserts"
+ },
+ "F30": {
+  "file": "crates/lens-core/tests/ipc.rs",
+  "fn": "f30_ipc_payload_truncated_nothing_on_disk"
+ },
+ "F31": {
+  "file": "crates/lens-core/tests/supervisor_ingest.rs",
+  "fn": "f31_leaked_token_redacted_before_ipc"
+ },
+ "F32": {
+  "file": "crates/lens-core/tests/supervisor_ingest.rs",
+  "fn": "f32_helper_path_applies_at_next_launch"
+ }
+}
