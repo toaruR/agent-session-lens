@@ -95,3 +95,11 @@ capabilities は `core:default`, `core:event:allow-listen`, `core:event:allow-un
 
 - `scripts/verify-final-state.py`（stdlib のみ、`--write-md` で `docs/plans/implementation-status-v5.md` の生成セクションを更新）: 固定プランの verify 181 コマンドを Git Bash で実行し、「期待終了コード一致」または「後続タスクによる置換の機械的証明付き」でなければ失敗する。あわせて fileset からプラン `changes[].path` の和集合を引いた計画外パスに根拠が無ければ失敗する。
 - 追加テスト: `src/format.test.ts`（`node --test src/format.test.ts`、relativeTime / updatingLabel の境界。tsconfig の `exclude` で tsc 対象外）、`src-tauri/src/wsl.rs` の `#[cfg(test)]`（`parse_ts`、`wsl_input` の status→turn 変換、degraded 判定。計 4 本）。
+
+## 8. コンパクト表示
+
+- 画面内のアプリ名は表示せず、OS のウィンドウタイトルにのみ表示する。
+- 表示幅が 900 CSS px 未満ではプロジェクト一覧だけを表示し、プロジェクト名と更新時刻の2列にする。列見出し、WSL・停止中の補足、エージェント列、セッション詳細、ログ収集の状態は隠す。
+- コンパクト表示の外側の余白・枠線はなく、一覧内の余白は 4px。長いプロジェクト名は折り返す。900px 以上では通常表示へ戻り、選択・開閉状態を維持する。
+- ネイティブウィンドウの最小サイズは 320 × 200。表示幅の判定は WebView の CSS px に従う。
+- `scripts/verify-session-tokens.mjs` は Tauri IPC を偽装したブラウザーで 320 / 600 / 899px と 900 / 1280px の表示・状態復元・横にはみ出さないことを検証する。OS の実ウィンドウ操作は対象外。

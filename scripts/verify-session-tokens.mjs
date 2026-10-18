@@ -112,8 +112,35 @@ try {
   assert.equal(await latest.getAttribute("open"), null);
   assert.equal(await old.getAttribute("open"), null);
   assert.equal(await failed.getAttribute("open"), "");
+  // Compact mode fills the window with just project names and update times.
+  assert.equal(await page.getByRole("heading", { name: "Agent Session Lens" }).count(), 0);
+  await page.getByRole("button", { name: /ログ収集の状態/ }).click();
+  const main = page.getByRole("main", { name: "プロジェクト一覧" });
+  for (const width of [320, 600, 899]) {
+    await page.setViewportSize({ width, height: 240 });
+    assert.equal(await page.locator("aside").isVisible(), false);
+    assert.equal(await page.locator("footer").isVisible(), false);
+    assert.equal(await main.locator("thead").isVisible(), false);
+    assert.equal(await main.locator("tbody tr:first-child td:visible").count(), 2);
+    assert.deepEqual(await main.boundingBox(), { x: 0, y: 0, width, height: 240 });
+    assert.equal(await main.evaluate((el) => getComputedStyle(el).padding), "4px");
+    const name = main.locator("tbody tr:first-child td:first-child span").first();
+    await name.evaluate((el) => { el.textContent = "very-long-project-name-".repeat(12); });
+    assert.equal(await main.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
+    if (width === 320) await page.screenshot({ path: path.join(outDir, "compact.png") });
+  }
+  for (const width of [900, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.equal(await page.locator("aside").isVisible(), true);
+    assert.equal(await page.locator("footer").isVisible(), true);
+    assert.equal(await main.locator("thead").isVisible(), true);
+    assert.equal(await main.locator("tbody tr:first-child td:visible").count(), 3);
+    assert.equal(await failed.getAttribute("open"), "");
+    assert.equal(await page.locator("#source-health-details").isVisible(), true);
+  }
+  await page.screenshot({ path: path.join(outDir, "normal.png") });
   assert.deepEqual(errors, []);
-  console.log("PASS: latest-only expansion, lazy calculation, descendant totals and refresh, partial totals, unknown and error retry");
+  console.log("PASS: session tokens and retry; compact layout at 320/600/899px, normal layout at 900/1280px, state preserved across resize");
 } finally {
   await browser.close();
 }

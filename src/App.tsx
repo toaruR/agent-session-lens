@@ -166,13 +166,13 @@ function ProjectRow({ p, selected, onSelect, now }: { p: ProjectActivity; select
       onClick={() => onSelect(p.key)}
       className={`cursor-pointer border-t border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50 ${selected ? "bg-sky-50 dark:bg-sky-950/30" : ""}`}
     >
-      <td className="py-2 pr-2">
+      <td className="py-1 pr-2 [overflow-wrap:anywhere] min-[900px]:py-2">
         <span className="font-medium">{p.name}</span>
-        {p.origin.kind === "wsl" && <span className="ml-1 text-xs text-zinc-500">(WSL: {p.origin.distro ?? ""})</span>}
-        {!p.originAvailable && <span className="ml-2 rounded bg-zinc-200 px-1.5 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">停止中</span>}
+        {p.origin.kind === "wsl" && <span className="ml-1 hidden text-xs text-zinc-500 min-[900px]:inline">(WSL: {p.origin.distro ?? ""})</span>}
+        {!p.originAvailable && <span className="ml-2 hidden rounded bg-zinc-200 px-1.5 py-0.5 text-xs text-zinc-600 min-[900px]:inline dark:bg-zinc-800 dark:text-zinc-400">停止中</span>}
       </td>
-      <td className={`py-2 pr-2 text-xs ${p.updating ? "font-medium text-emerald-600" : "text-zinc-500"}`}>{when}</td>
-      <td className="py-2 pr-2 text-xs text-zinc-600 dark:text-zinc-400">{p.agents.map((a) => AGENT_LABEL[a]).join(", ")}</td>
+      <td className={`py-1 pr-2 text-xs min-[900px]:py-2 ${p.updating ? "font-medium text-emerald-600" : "text-zinc-500"}`}>{when}</td>
+      <td className="hidden py-2 pr-2 text-xs text-zinc-600 min-[900px]:table-cell dark:text-zinc-400">{p.agents.map((a) => AGENT_LABEL[a]).join(", ")}</td>
     </tr>
   );
 }
@@ -180,7 +180,12 @@ function ProjectRow({ p, selected, onSelect, now }: { p: ProjectActivity; select
 function ProjectList({ projects, selected, onSelect, now }: { projects: ProjectActivity[]; selected: string | null; onSelect: (key: string) => void; now: number }) {
   return (
     <table className="w-full table-fixed border-collapse text-sm">
-      <thead>
+      <colgroup>
+        <col />
+        <col className="w-20 min-[900px]:w-28" />
+        <col className="hidden w-48 min-[900px]:table-column" />
+      </colgroup>
+      <thead className="hidden min-[900px]:table-header-group">
         <tr className="text-left text-xs text-zinc-500">
           <th className="py-1 pr-2 font-medium">プロジェクト</th>
           <th className="w-28 py-1 pr-2 font-medium">更新</th>
@@ -356,19 +361,16 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-dvh flex-col gap-3 overflow-hidden p-3">
-      <header className="flex shrink-0 items-center justify-between">
-        <h1 className="text-lg font-semibold">Agent Session Lens</h1>
-      </header>
-      <div className="flex min-h-0 flex-1 gap-3">
-        <main aria-label="プロジェクト一覧" className="min-w-0 flex-1 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="flex h-dvh flex-col overflow-hidden min-[900px]:gap-3 min-[900px]:p-3">
+      <div className="flex min-h-0 flex-1 min-[900px]:gap-3">
+        <main aria-label="プロジェクト一覧" className="min-w-0 flex-1 overflow-auto bg-white p-1 min-[900px]:rounded-lg min-[900px]:border min-[900px]:border-zinc-200 min-[900px]:p-3 dark:bg-zinc-900 min-[900px]:dark:border-zinc-800">
           <ProjectList projects={projects} selected={selected} onSelect={setSelected} now={now} />
         </main>
-        <aside className="w-[35%] max-w-96 shrink-0 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <aside className="hidden w-[35%] max-w-96 shrink-0 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 min-[900px]:block dark:border-zinc-800 dark:bg-zinc-900">
           {detail ? <AgentSessions key={detail.project.key} sessions={detail.sessions} now={now} revision={tokenRevision} /> : <div className="text-sm text-zinc-500">プロジェクトを選択してください</div>}
         </aside>
       </div>
-      <footer className="flex max-h-[30dvh] min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+      <footer className="hidden max-h-[30dvh] min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-200 bg-white min-[900px]:flex dark:border-zinc-800 dark:bg-zinc-900">
         <button
           type="button"
           aria-expanded={healthExpanded}
