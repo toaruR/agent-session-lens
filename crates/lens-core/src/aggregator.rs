@@ -5,12 +5,12 @@
 //! Lens's own repository is deliberately not excluded (F15, documented unprotectable limit).
 
 use crate::clock::Clock;
-use crate::consts::REEVAL_SECS;
+use crate::consts::{HIDE_NON_REPO_SECS, HIDE_REPO_SECS, REEVAL_SECS};
 use crate::model::v5::{
     self, ActiveTool, CurrentTask, Detail, Health, Hierarchy, Origin, OriginKind, ProjectActivity, SessionProject,
     UnifiedSession, UNATTRIBUTED_KEY,
 };
-use crate::model::{Agent, Completeness, Confidence, Diagnostic, SessionKind, Status, StatusValue, TimeSource};
+use crate::model::{Agent, Attribution, Completeness, Confidence, Diagnostic, SessionKind, Status, StatusValue, TimeSource};
 use crate::redact::{sanitize, Field};
 use crate::session::{aggregate_updating, SessionState};
 use chrono::{DateTime, Utc};
@@ -456,6 +456,13 @@ impl Aggregator {
         };
         // A stopped distro shows its last state; nothing there is being updated (section 6).
         updating &= origin_available;
+        // Old rows are hidden but stay members, so a new event brings them back.
+        let repo = members.iter().any(|m| m.input.projects.iter().any(|p| p.key == key && p.attribution == Attribution::GitRoot));
+        let hide_secs = if repo { HIDE_REPO_SECS } else { HIDE_NON_REPO_SECS };
+        if !updating && last.is_some_and(|(t, _)| (self.now() - t).num_seconds() >= hide_secs as i64) {
+            self.rows.remove(key);
+            return;
+        }
         let row = ProjectActivity {
             key: key.to_string(),
             name,

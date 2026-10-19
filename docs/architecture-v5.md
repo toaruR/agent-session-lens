@@ -24,6 +24,8 @@ Claude Code / Codex CLI のローカルセッションログ（Windows と WSL2�
 | HOT_WINDOW_SECS / HOT_POLL_SECS | 900 / 2 | 直近 15 分更新のファイルを 2 秒ごとに (size, mtime) 確認。通知欠落の検出遅延上限。独立根拠: 追記の遅延を 2 秒に抑え、stat のみ・直近 15 分分に限るので負荷が小さい |
 | RECONCILE_SECS | 60 | ディレクトリ照合周期。独立根拠: 新規ファイルの検出遅延を 1 分以内にしつつ、7 日分の列挙を 1 分 1 回に抑える |
 | INITIAL_SCAN_DAYS | 7 | 初回走査は `mtime ≥ now_ms − 7 日`（ちょうど 7 日は読む）。以前は件数のみ記録 |
+| HIDE_REPO_SECS | 2592000 | git ルートのプロジェクトは最終更新から 30 日以上（更新中を除く）で一覧から隠す。新しいイベントで再表示 |
+| HIDE_NON_REPO_SECS | 3600 | git ルートでないプロジェクト（raw_path・unattributed）は 60 分以上で隠す |
 | DISTRO_POLL_SECS | 60 | `wsl.exe --list --running --quiet` の周期 |
 | HB_INTERVAL_SECS / HB_TIMEOUT_SECS / HB_MEDIAN_N | 10 / 30 / 5 | heartbeat 周期 / 無応答で再起動する経過秒（周期の 3 倍）/ clockOffset 中央値の個数 |
 | BACKOFF_MAX_SECS | 60 | 再起動・再試行の待ち `min(2^(n−1), 60)` 秒（n は連続失敗回数、成功で n=1） |

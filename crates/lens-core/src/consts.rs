@@ -12,6 +12,9 @@ pub const HOT_WINDOW_SECS: u64 = 900;
 pub const HOT_POLL_SECS: u64 = 2;
 pub const RECONCILE_SECS: u64 = 60;
 pub const INITIAL_SCAN_DAYS: u64 = 7;
+/// Project rows not updated for this long are hidden: git-root projects / everything else.
+pub const HIDE_REPO_SECS: u64 = 30 * 24 * 3600;
+pub const HIDE_NON_REPO_SECS: u64 = 3600;
 pub const DISTRO_POLL_SECS: u64 = 60;
 pub const HB_INTERVAL_SECS: u64 = 10;
 pub const HB_TIMEOUT_SECS: u64 = 30;

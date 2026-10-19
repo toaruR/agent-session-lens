@@ -288,3 +288,45 @@ fn project_row_includes_antigravity_agent() {
     assert_eq!(rows[0].agents, vec![Agent::ClaudeCode, Agent::Antigravity]);
 }
 
+
+fn raw(name: &str) -> Vec<SessionProject> {
+    vec![SessionProject {
+        key: format!("D:/tmp/{name}"),
+        name: name.to_string(),
+        display_path: format!("D:/tmp/{name}"),
+        attribution: Attribution::RawPath,
+    }]
+}
+
+fn idle_at(id: &str, secs: i64) -> SessionState {
+    let mut s = SessionState::new(id, SessionKind::TopLevel);
+    s.touch(Some(at(secs)));
+    s
+}
+
+#[test]
+fn non_repo_project_hidden_after_60_minutes() {
+    let clock = clock_at(3599);
+    let mut agg = Aggregator::new(clock.clone());
+    agg.upsert(claude(idle_at("raw", 0), raw("scratch")));
+    agg.upsert(claude(idle_at("none", 0), Vec::new()));
+    assert_eq!(agg.list_projects().len(), 2);
+    clock.advance(std::time::Duration::from_secs(1));
+    agg.reeval();
+    assert!(agg.list_projects().is_empty());
+    // A new event brings the row back.
+    agg.upsert(claude(idle_at("raw", 3600), raw("scratch")));
+    assert_eq!(agg.list_projects().len(), 1);
+}
+
+#[test]
+fn repo_project_hidden_after_one_month() {
+    let month = 30 * 24 * 3600;
+    let clock = clock_at(month - 1);
+    let mut agg = Aggregator::new(clock.clone());
+    agg.upsert(claude(idle_at("repo", 0), proj("repo")));
+    assert_eq!(agg.list_projects().len(), 1);
+    clock.advance(std::time::Duration::from_secs(1));
+    agg.reeval();
+    assert!(agg.list_projects().is_empty());
+}
