@@ -28,9 +28,17 @@ fn path_matches(path: &str, t: &Target) -> bool {
     n.key == t.key || n.key.strip_prefix(&t.key).is_some_and(|rest| rest.starts_with(sep))
 }
 
-/// Editor window title, e.g. `● main.rs - repo [WSL: Ubuntu] ⟨/home/u/repo⟩ - Visual Studio Code`.
-pub fn editor_title_matches(title: &str, t: &Target) -> bool {
-    // The `⟨${rootPath}⟩` marker that vscode-selector can add to window.title.
+/// Parts of an editor window title, e.g. `● main.rs - repo [WSL: Ubuntu] ⟨/home/u/repo⟩ - Visual Studio Code`.
+struct EditorTitle {
+    root_name: String,
+    /// Remote label such as `WSL: Ubuntu`.
+    label: Option<String>,
+    /// From the `⟨${rootPath}⟩` marker that vscode-selector can add to window.title.
+    /// `None` when absent, empty or abbreviated (`~` in WSL), so only the name can be compared.
+    root_path: Option<String>,
+}
+
+fn parse_editor_title(title: &str) -> Option<EditorTitle> {
     let mut title = title.to_string();
     let mut root_path = None;
     if let (Some(a), Some(b)) = (title.find(PATH_OPEN), title.find(PATH_CLOSE)) {
@@ -40,26 +48,45 @@ pub fn editor_title_matches(title: &str, t: &Target) -> bool {
             title.replace_range(start..b + PATH_CLOSE.len_utf8(), "");
         }
     }
-    let Some(rest) = EDITOR_DIRS.iter().find_map(|(app, _)| title.strip_suffix(&format!(" - {app}"))) else { return false };
+    let rest = EDITOR_DIRS.iter().find_map(|(app, _)| title.strip_suffix(&format!(" - {app}")))?;
     let mut root = rest.rsplit(" - ").next().unwrap_or(rest);
     let mut label = None;
     if let Some(i) = root.rfind(" [").filter(|_| root.ends_with(']')) {
-        label = Some(&root[i + 2..root.len() - 1]);
+        label = Some(root[i + 2..root.len() - 1].to_string());
         root = &root[..i];
     }
     let root = root.strip_suffix(" (Workspace)").unwrap_or(root);
     let root = root.strip_prefix("[Administrator] ").unwrap_or(root);
     let root = root.strip_prefix("● ").or_else(|| root.strip_prefix("* ")).unwrap_or(root);
-    let origin_ok = match (&t.distro, label) {
+    let root_path = root_path.filter(|p| !p.is_empty() && !p.starts_with('~'));
+    Some(EditorTitle { root_name: root.to_string(), label, root_path })
+}
+
+fn origin_matches(e: &EditorTitle, t: &Target) -> bool {
+    match (&t.distro, e.label.as_deref()) {
         (None, None) => true,
         (Some(d), Some(l)) => l.strip_prefix("WSL: ").is_some_and(|x| x.eq_ignore_ascii_case(d)),
         _ => false,
-    };
-    if !origin_ok { return false; }
-    match root_path.filter(|p| !p.is_empty()) {
-        Some(p) => path_matches(&p, t),
-        None => root.eq_ignore_ascii_case(&t.name),
     }
+}
+
+/// The editor has the project (or a folder inside it) open.
+pub fn editor_title_matches(title: &str, t: &Target) -> bool {
+    let Some(e) = parse_editor_title(title).filter(|e| origin_matches(e, t)) else { return false };
+    match &e.root_path {
+        Some(p) => path_matches(p, t),
+        None => e.root_name.eq_ignore_ascii_case(&t.name),
+    }
+}
+
+/// The editor has a parent folder of the project open: the length of its key (deeper is longer).
+/// Needs the path marker; a folder name alone cannot tell.
+pub fn editor_ancestor_depth(title: &str, t: &Target) -> Option<usize> {
+    let e = parse_editor_title(title).filter(|e| origin_matches(e, t))?;
+    let root = normalize(e.root_path.as_deref()?, t.distro.as_deref())?.key;
+    let sep = if t.distro.is_some() { '/' } else { '\\' };
+    let rest = t.key.strip_prefix(&root)?;
+    (!rest.is_empty() && (root.ends_with(sep) || rest.starts_with(sep))).then_some(root.len())
 }
 
 /// Settings folder of the editor whose title lacks the path marker, so it can only be matched by name.
@@ -93,7 +120,7 @@ pub fn focus_project(_: &Target) -> Result<usize, String> {
 
 #[cfg(windows)]
 mod win {
-    use super::{agent_cwd_matches, editor_title_matches, editor_without_marker, Target};
+    use super::{agent_cwd_matches, editor_ancestor_depth, editor_title_matches, editor_without_marker, Target};
     use std::collections::HashMap;
     use std::ffi::c_void;
     use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
@@ -134,8 +161,16 @@ mod win {
             }
         }
         // Editors last, so one of them ends up on top.
-        for w in windows.iter().filter(|w| w.class == EDITOR_CLASS && editor_title_matches(&w.title, t)) {
-            if !found.contains(&w.hwnd) { found.push(w.hwnd); }
+        let editors: Vec<&Win> = windows.iter().filter(|w| w.class == EDITOR_CLASS).collect();
+        let mut matched: Vec<HWND> = editors.iter().filter(|w| editor_title_matches(&w.title, t)).map(|w| w.hwnd).collect();
+        if matched.is_empty() {
+            // None has the project itself open: fall back to the editors on its nearest parent folder.
+            let depths: Vec<(HWND, usize)> = editors.iter().filter_map(|w| Some((w.hwnd, editor_ancestor_depth(&w.title, t)?))).collect();
+            let deepest = depths.iter().map(|&(_, d)| d).max();
+            matched = depths.into_iter().filter(|&(_, d)| Some(d) == deepest).map(|(h, _)| h).collect();
+        }
+        for hwnd in matched {
+            if !found.contains(&hwnd) { found.push(hwnd); }
         }
         for &hwnd in &found {
             unsafe { activate(hwnd) };
@@ -326,6 +361,26 @@ mod tests {
         assert!(editor_title_matches("a.rs - repo [WSL: Ubuntu] ⟨/home/u/repo⟩ - Visual Studio Code", &t));
         assert!(!editor_title_matches("a.rs - repo [WSL: Debian] - Visual Studio Code", &t));
         assert!(!editor_title_matches("a.rs - repo - Visual Studio Code", &t));
+    }
+
+    #[test]
+    fn parent_folder_editor() {
+        let t = win(r"D:\work\repo");
+        assert_eq!(editor_ancestor_depth(r"a.rs - work ⟨D:\work⟩ - Visual Studio Code", &t), Some(r"d:\work".len()));
+        assert_eq!(editor_ancestor_depth(r"a.rs - D:\ ⟨D:\⟩ - Cursor", &t), Some(3));
+        assert_eq!(editor_ancestor_depth(r"a.rs - repo ⟨D:\work\repo⟩ - Visual Studio Code", &t), None);
+        assert_eq!(editor_ancestor_depth(r"a.rs - wo ⟨D:\wo⟩ - Visual Studio Code", &t), None);
+        assert_eq!(editor_ancestor_depth("a.rs - work - Visual Studio Code", &t), None);
+        assert_eq!(editor_ancestor_depth(r"a.rs - work [WSL: Ubuntu] ⟨D:\work⟩ - Visual Studio Code", &t), None);
+        let w = wsl("Ubuntu", "/home/u/repo");
+        assert_eq!(editor_ancestor_depth("a.rs - u [WSL: Ubuntu] ⟨/home/u⟩ - Visual Studio Code", &w), Some("wsl:Ubuntu:/home/u".len()));
+        assert_eq!(editor_ancestor_depth("a.rs - u [WSL: Ubuntu] ⟨~⟩ - Visual Studio Code", &w), None);
+    }
+
+    #[test]
+    fn abbreviated_wsl_path_falls_back_to_name() {
+        let w = wsl("Ubuntu", "/home/u/repo");
+        assert!(editor_title_matches("a.rs - repo [WSL: Ubuntu] ⟨~/repo⟩ - Visual Studio Code", &w));
     }
 
     #[test]
