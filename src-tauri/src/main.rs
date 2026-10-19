@@ -2,10 +2,12 @@
 
 mod commands;
 mod ingest;
+mod open;
 mod state;
+mod title_settings;
 mod wsl;
 
-use commands::{get_health, get_project_detail, get_session_tokens, list_projects, set_distro_enabled, set_source_root};
+use commands::{editors_without_title_path, focus_project, get_health, get_project_detail, get_session_tokens, install_title_path, list_projects, reveal_project, set_distro_enabled, set_source_root};
 use lens_core::aggregator::Aggregator;
 use lens_core::clock::{Clock, SystemClock};
 use lens_core::ipc::Phase;
@@ -40,7 +42,11 @@ fn main() {
             get_health,
             get_session_tokens,
             set_distro_enabled,
-            set_source_root
+            set_source_root,
+            reveal_project,
+            focus_project,
+            editors_without_title_path,
+            install_title_path
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

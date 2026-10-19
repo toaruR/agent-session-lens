@@ -21,6 +21,14 @@ Claude Code と Codex のローカルセッションログ（読み取り専用�
 
 スクリーンショットはサンプルデータを使用しています。
 
+## プロジェクト一覧の操作
+
+- クリック: セッション詳細を表示。
+- Shift+クリック: プロジェクトのフォルダをエクスプローラーで開く。
+- Ctrl+クリック: そのプロジェクトを開いているウィンドウを前面に出す。
+  - エディタ（VS Code / Cursor / Antigravity IDE）はウィンドウタイトルのフォルダ名で照合します。タイトルに `⟨${rootPath}⟩`（[vscode-selector](https://github.com/toaruR/vscode-selector) のパス表示）があればフルパスで照合します。パス表示の無いエディタが開いていると、settings.json の `window.title` に追加するか確認します（変更前は `.bak` に保存。断るとアプリ終了まで再確認しません）。
+  - エージェント CLI（Claude Code / Codex / Antigravity の `claude` / `codex` / `agy`）は作業ディレクトリで照合し、それを動かしているターミナルやデスクトップアプリのウィンドウを前面に出します。エディタ内で動くものはエディタ側で扱います。WSL 内のプロセスは対象外です。
+
 ## ビルドと実行
 
 前提: Rust（stable）、Node.js、Tauri の前提環境（Windows では WebView2）。

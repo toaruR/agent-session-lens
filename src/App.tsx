@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { relativeTime, updatingLabel } from "./format";
@@ -9,6 +9,18 @@ import type { Agent, Detail, IpcError, ProjectActivity, SourceHealth, SourceStat
 
 const AGENT_LABEL: Record<Agent, string> = { claude_code: "Claude Code", codex: "Codex", agy: "Antigravity" };
 const RETRY_MS = 1000;
+const NOTICE_MS = 3000;
+// Editors reload settings.json on change; give the new window titles a moment to appear.
+const TITLE_RELOAD_MS = 500;
+
+const EDITOR_LABEL: Record<string, string> = {
+  Code: "VS Code",
+  "Code - Insiders": "VS Code Insiders",
+  VSCodium: "VSCodium",
+  "Code - OSS": "Code - OSS",
+  Cursor: "Cursor",
+  "Antigravity IDE": "Antigravity IDE",
+};
 
 const STATUS_LABEL: Record<StatusValue, string> = {
   running: "実行中",
@@ -158,12 +170,17 @@ function StatusBadge({ s }: { s: UnifiedSession }) {
   );
 }
 
-function ProjectRow({ p, selected, onSelect, now }: { p: ProjectActivity; selected: boolean; onSelect: (key: string) => void; now: number }) {
+type OnSelect = (key: string, e: MouseEvent) => void;
+
+function ProjectRow({ p, selected, onSelect, now }: { p: ProjectActivity; selected: boolean; onSelect: OnSelect; now: number }) {
   const age = ageSeconds(p.lastUpdatedAt, now);
   const when = p.updating ? updatingLabel(true, p.updatingConfidence) : age === null ? "—" : relativeTime(age, p.lastUpdatedSource);
   return (
     <tr
-      onClick={() => onSelect(p.key)}
+      onClick={(e) => onSelect(p.key, e)}
+      // Keep Shift/Ctrl+click from selecting text.
+      onMouseDown={(e) => { if (e.shiftKey || e.ctrlKey) e.preventDefault(); }}
+      title="Shift+クリックでフォルダを開く / Ctrl+クリックで開いているエディタ・エージェントを前面に"
       className={`cursor-pointer border-t border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50 ${selected ? "bg-sky-50 dark:bg-sky-950/30" : ""}`}
     >
       <td className="py-1 pr-2 [overflow-wrap:anywhere] min-[900px]:py-2">
@@ -177,7 +194,7 @@ function ProjectRow({ p, selected, onSelect, now }: { p: ProjectActivity; select
   );
 }
 
-function ProjectList({ projects, selected, onSelect, now }: { projects: ProjectActivity[]; selected: string | null; onSelect: (key: string) => void; now: number }) {
+function ProjectList({ projects, selected, onSelect, now }: { projects: ProjectActivity[]; selected: string | null; onSelect: OnSelect; now: number }) {
   return (
     <table className="w-full table-fixed border-collapse text-sm">
       <colgroup>
@@ -346,11 +363,73 @@ function HealthPanel({ sources, now }: { sources: SourceHealth[]; now: number })
   );
 }
 
+function TitleSetupDialog({ editors, onAccept, onDecline }: { editors: string[]; onAccept: () => void; onDecline: () => void }) {
+  return (
+    <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4" onKeyDown={(e) => { if (e.key === "Escape") onDecline(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="title-setup-heading" className="max-w-md rounded-lg bg-white p-4 text-sm shadow-lg dark:bg-zinc-900">
+        <h2 id="title-setup-heading" className="mb-2 font-semibold">ウィンドウタイトルにパスを表示しますか？</h2>
+        <p className="mb-2">{editors.map((e) => EDITOR_LABEL[e] ?? e).join("、")} のウィンドウタイトルにフォルダのパスがないため、フォルダ名でしか照合できません（同名のフォルダを取り違えることがあります）。</p>
+        <p className="mb-4 text-xs text-zinc-500">各エディタの settings.json（プロファイルを含む）の window.title に ⟨${"{rootPath}"}⟩ を追加します。変更前のファイルは .bak に保存します。再起動は不要です。</p>
+        <div className="flex justify-end gap-2">
+          <button type="button" className="rounded border border-zinc-300 px-3 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800" onClick={onDecline}>今はしない</button>
+          <button type="button" autoFocus className="rounded bg-sky-600 px-3 py-1 text-white hover:bg-sky-700" onClick={onAccept}>追加する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const now = useNow();
   const [selected, setSelected] = useState<string | null>(null);
   const [healthExpanded, setHealthExpanded] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [titleSetup, setTitleSetup] = useState<{ key: string; editors: string[] } | null>(null);
+  // Asked once per app run; declining falls back to folder-name matching.
+  const titleSetupDeclined = useRef(false);
   const { projects, health, detail, tokenRevision } = useLens(selected);
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(id);
+  }, [notice]);
+  const fail = useCallback((err: unknown) => setNotice(typeof err === "string" ? err : "操作に失敗しました"), []);
+  const focusProject = useCallback((key: string) => {
+    invoke<number>("focus_project", { key })
+      .then((n) => { if (n === 0) setNotice("このプロジェクトを開いているエディタ・エージェントは見つかりません"); })
+      .catch(fail);
+  }, [fail]);
+  const onSelect = useCallback((key: string, e: MouseEvent) => {
+    if (e.shiftKey) {
+      invoke("reveal_project", { key }).catch(fail);
+    } else if (e.ctrlKey) {
+      invoke<string[]>("editors_without_title_path")
+        .then((editors) => {
+          if (editors.length > 0 && !titleSetupDeclined.current) setTitleSetup({ key, editors });
+          else focusProject(key);
+        })
+        .catch(fail);
+    } else {
+      setSelected(key);
+    }
+  }, [fail, focusProject]);
+  const acceptTitleSetup = () => {
+    if (!titleSetup) return;
+    const { key, editors } = titleSetup;
+    setTitleSetup(null);
+    invoke<string[]>("install_title_path", { editors })
+      .then((errors) => {
+        if (errors.length > 0) setNotice(`設定を書き換えられませんでした: ${errors.join(" / ")}`);
+        setTimeout(() => focusProject(key), TITLE_RELOAD_MS);
+      })
+      .catch(fail);
+  };
+  const declineTitleSetup = () => {
+    if (!titleSetup) return;
+    titleSetupDeclined.current = true;
+    setTitleSetup(null);
+    focusProject(titleSetup.key);
+  };
   const healthySources = health?.filter((source) => source.state === "ok").length ?? 0;
 
   if (!isTauri()) {
@@ -364,7 +443,7 @@ export default function App() {
     <div className="flex h-dvh flex-col overflow-hidden min-[900px]:gap-3 min-[900px]:p-3">
       <div className="flex min-h-0 flex-1 min-[900px]:gap-3">
         <main aria-label="プロジェクト一覧" className="min-w-0 flex-1 overflow-auto bg-white p-1 min-[900px]:rounded-lg min-[900px]:border min-[900px]:border-zinc-200 min-[900px]:p-3 dark:bg-zinc-900 min-[900px]:dark:border-zinc-800">
-          <ProjectList projects={projects} selected={selected} onSelect={setSelected} now={now} />
+          <ProjectList projects={projects} selected={selected} onSelect={onSelect} now={now} />
         </main>
         <aside className="hidden w-[35%] max-w-96 shrink-0 overflow-auto rounded-lg border border-zinc-200 bg-white p-3 min-[900px]:block dark:border-zinc-800 dark:bg-zinc-900">
           {detail ? <AgentSessions key={detail.project.key} sessions={detail.sessions} now={now} revision={tokenRevision} /> : <div className="text-sm text-zinc-500">プロジェクトを選択してください</div>}
@@ -386,6 +465,8 @@ export default function App() {
           <HealthPanel sources={health ?? []} now={now} />
         </div>
       </footer>
+      {titleSetup && <TitleSetupDialog editors={titleSetup.editors} onAccept={acceptTitleSetup} onDecline={declineTitleSetup} />}
+      {notice && <div role="status" className="fixed bottom-3 left-1/2 -translate-x-1/2 rounded bg-zinc-800 px-3 py-1.5 text-xs text-white shadow dark:bg-zinc-200 dark:text-zinc-900">{notice}</div>}
     </div>
   );
 }

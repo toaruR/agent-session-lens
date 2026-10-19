@@ -1,5 +1,7 @@
 //! Tauri commands (thin wrappers over `lens_core::ipc`).
 
+use crate::open;
+use crate::title_settings;
 use crate::state::{lock, Shared};
 use lens_core::ipc::{self, AggregatorView, RealPathProbe};
 use lens_core::model::v5::{Detail, IpcError, ProjectActivity, SourceHealth};
@@ -145,3 +147,45 @@ pub fn set_source_root(
     Ok(serde_json::json!({ "ok": true }))
 }
 
+
+fn open_target(state: &Shared, key: &str) -> Result<open::Target, String> {
+    let detail = lock(&state.agg).project_detail(key).ok_or("プロジェクトが見つかりません")?;
+    let p = detail.project;
+    if let Some((distro, linux)) = p.key.strip_prefix("wsl:").and_then(|rest| rest.split_once(':')) {
+        let path = format!(r"\wsl.localhost\{}{}", distro, linux.replace('/', r"\"));
+        return Ok(open::Target { distro: Some(distro.to_string()), key: p.key.clone(), name: p.name, path });
+    }
+    // The key is lower-cased; prefer the display path, which keeps the original case.
+    let path = detail.sessions.iter().flat_map(|s| &s.projects).find(|sp| sp.key == p.key)
+        .map(|sp| sp.display_path.clone()).unwrap_or_else(|| p.key.clone());
+    Ok(open::Target { key: p.key, name: p.name, distro: None, path })
+}
+
+#[tauri::command]
+pub fn reveal_project(state: tauri::State<'_, Shared>, key: String) -> Result<(), String> {
+    open::reveal_project(&open_target(&state, &key)?)
+}
+
+/// Sync on purpose: runs on the UI thread, which holds the foreground right after the click.
+#[tauri::command]
+pub fn focus_project(state: tauri::State<'_, Shared>, key: String) -> Result<usize, String> {
+    open::focus_project(&open_target(&state, &key)?)
+}
+
+/// Editors (settings folder names) whose window titles cannot be matched by path.
+#[tauri::command]
+pub fn editors_without_title_path() -> Vec<&'static str> {
+    open::editors_without_marker()
+}
+
+/// Adds the path marker to window.title of the given editors. Returns a message per failed file.
+#[tauri::command]
+pub fn install_title_path(editors: Vec<String>) -> Result<Vec<String>, String> {
+    let appdata = std::env::var_os("APPDATA").filter(|v| !v.is_empty()).ok_or("APPDATA が設定されていません")?;
+    let mut errors = Vec::new();
+    for editor in editors {
+        let (_, dir) = title_settings::EDITOR_DIRS.iter().find(|(_, d)| *d == editor).ok_or("未対応のエディタです")?;
+        errors.extend(title_settings::install(&title_settings::settings_files(std::path::Path::new(&appdata), dir)));
+    }
+    Ok(errors)
+}

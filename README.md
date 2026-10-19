@@ -21,6 +21,14 @@ Below 900 px wide, the app shows a compact project list.
 
 Screenshots use sample data.
 
+## Project list actions
+
+- Click: show session details.
+- Shift+click: open the project folder in Explorer.
+- Ctrl+click: bring windows working on the project to the front.
+  - Editors (VS Code / Cursor / Antigravity IDE) are matched by the folder name in the window title, or by the full path when the title contains `⟨${rootPath}⟩` (the path marker of [vscode-selector](https://github.com/toaruR/vscode-selector)). If an open editor lacks the marker, the app offers to add it to `window.title` in that editor's settings.json (the original is kept as `.bak`; declining is remembered until the app exits).
+  - Agent CLIs (`claude` / `codex` / `agy`) are matched by working directory, and the terminal or desktop app window running them is raised. Agents inside an editor are covered by the editor. Processes inside WSL are not matched.
+
 ## Build and Run
 
 Prerequisites: Rust (stable), Node.js, and Tauri prerequisites (e.g., WebView2 on Windows).
