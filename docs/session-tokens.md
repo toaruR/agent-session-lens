@@ -12,6 +12,8 @@
 - Claude Code: `assistant.message.usage` を読み、同じ `message.id` は最後の値だけを数える。ID 欠落時は `uuid`、それも欠ける場合は行番号を使う。同一ファイル内の親/sidechain と `subagents/agent-*.jsonl` の子を分離する。
 - Antigravity: 読み取り専用 SQLite 接続で `steps.metadata` の protobuf field 9 を集計する。使用量が取れない形式では `gen_metadata.data` の field 1 → field 4 を使う。両テーブルを合算しない。usage の field 2/3/4/5 は通常入力/出力/キャッシュ作成/キャッシュ入力。
 
+Codex と Antigravity はキャッシュ作成量を実質記録しない（2026-10 時点の実ログで Codex の `cache_write_input_tokens` は全件 0、AGY の field 4 は全 DB・全モデルで不在。どちらも暗黙キャッシュで書き込み量を返さない）。UI ではこの 2 つの 0 を「記録なし」と表示する。
+
 合計はキャッシュ入力＋通常入力＋キャッシュ作成＋出力。料金やサブスクリプション使用枠への換算値ではない。
 
 既知の集計値と子の参照は設定ディレクトリの `session-tokens.json`（version 2）に保存する（通常 `%APPDATA%\agent-session-lens\session-tokens.json`）。キーは source を含む `sessionUid`、検証情報はログのパス・サイズ・更新時刻、子ディレクトリ、AGY の WAL と transcript のサイズ・更新時刻。変更がなければ再起動後もログ全文を再集計しない。子孫込み合計自体は固定保存せず、各ノードのキャッシュを検証して毎回合算し、親ログが変わらない子孫の更新も反映する。計算途中でログが更新された場合は再試行し、安定した結果だけを一時ファイル＋rename で保存する。未知の値と失敗は保存しない。破損・旧バージョンのキャッシュは無視する。

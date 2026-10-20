@@ -248,7 +248,11 @@ function SessionTokens({ s, revision }: { s: UnifiedSession; revision: string })
     ["合計", "totalTokens"], ["キャッシュ入力", "cachedInputTokens"], ["通常入力", "uncachedInputTokens"],
     ["キャッシュ作成", "cacheCreationInputTokens"], ["出力（推論を含む）", "outputTokens"],
   ];
-  const value = (usage: TokenUsage | null, key: keyof TokenUsage) => usage ? usage[key].toLocaleString("ja-JP") : "不明";
+  // Codex always logs cache_write_input_tokens as 0 and AGY never writes field 4: 0 there means "not recorded".
+  const unrecorded = (usage: TokenUsage, key: keyof TokenUsage) =>
+    key === "cacheCreationInputTokens" && s.agent !== "claude_code" && usage[key] === 0;
+  const value = (usage: TokenUsage | null, key: keyof TokenUsage) =>
+    !usage ? "不明" : unrecorded(usage, key) ? "記録なし" : usage[key].toLocaleString("ja-JP");
   return (
     <Field label="トークン数">
       <div aria-live="polite">
